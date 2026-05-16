@@ -1,0 +1,40 @@
+
+---
+
+### 2. 📄 .gitignore (Ignore These Files)
+
+GitHub repo mein "Add file" → "Create new file" → **.gitignore**
+
+```gitignore
+# Dependencies
+node_modules/
+.pnp.js
+
+# Environment
+.env
+.env.local
+.env.production
+
+# Logs
+logs/
+*.log
+npm-debug.log*
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Data
+data/
+*.json
+!package.json
+
+# Uploads
+uploads/
+temp/
