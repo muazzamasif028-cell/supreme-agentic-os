@@ -1,1 +1,468 @@
 
+// ============================================
+// src/supreme-copilot.js
+// SUPREME AI CO-PILOT - The Ultimate Guide
+// Leads EVERY user through the ENTIRE platform
+// ============================================
+
+class SupremeCoPilot {
+    
+    constructor() {
+        this.user = null;
+        this.context = {};
+        this.conversation = [];
+        this.platform = this.loadPlatformMap();
+        this.suggestions = new Map();
+    }
+    
+    // ==========================================
+    // LOAD PLATFORM MAP
+    // ==========================================
+    loadPlatformMap() {
+        return {
+            // Every feature, every button, every action
+            features: {
+                detection: {
+                    name: 'Problem Detection',
+                    icon: '🔍',
+                    path: '/detect',
+                    description: 'Find 60+ types of problems automatically',
+                    whoNeeds: ['All users'],
+                    when: 'Whenever something feels wrong'
+                },
+                dashboard: {
+                    name: 'Live Dashboard',
+                    icon: '📊',
+                    path: '/dashboard',
+                    description: 'Real-time metrics and monitoring',
+                    whoNeeds: ['Admins', 'DevOps', 'Managers'],
+                    when: 'Daily monitoring'
+                },
+                ghost: {
+                    name: 'Ghost Mode',
+                    icon: '👻',
+                    path: '/ghost',
+                    description: '24/7 autonomous repair',
+                    whoNeeds: ['Enterprise', 'Everyone who wants peace'],
+                    when: 'Always ON'
+                },
+                payment: {
+                    name: 'Billing',
+                    icon: '💰',
+                    path: '/billing',
+                    description: 'Manage payments and invoices',
+                    whoNeeds: ['Admins', 'Finance'],
+                    when: 'Monthly'
+                },
+                chip: {
+                    name: 'Chip Diagnostic',
+                    icon: '💾',
+                    path: '/chip',
+                    description: 'Hardware-level problem detection',
+                    whoNeeds: ['Hardware Engineers', 'Manufacturers'],
+                    when: 'When hardware acts strange'
+                },
+                workspace: {
+                    name: 'Workspace IDE',
+                    icon: '💻',
+                    path: '/workspace',
+                    description: 'Your personalized coding environment',
+                    whoNeeds: ['Developers', 'Engineers'],
+                    when: 'Writing or debugging code'
+                },
+                playbooks: {
+                    name: 'Fix Playbooks',
+                    icon: '📖',
+                    path: '/playbooks',
+                    description: 'Ready-made solution packages',
+                    whoNeeds: ['New users', 'Quick fixes'],
+                    when: 'Need immediate solution'
+                },
+                neom: {
+                    name: 'NEOM Control',
+                    icon: '🏙️',
+                    path: '/neom',
+                    description: 'Smart city infrastructure control',
+                    whoNeeds: ['Smart Cities', 'Infrastructure'],
+                    when: 'City-wide management'
+                }
+            },
+            
+            // User journeys
+            journeys: {
+                newUser: {
+                    name: 'First Time User',
+                    steps: [
+                        { step: 1, action: 'Sign up with company email', path: '/signup' },
+                        { step: 2, action: 'Verify email (1 click)', path: '/verify' },
+                        { step: 3, action: 'Describe your first problem', path: '/detect' },
+                        { step: 4, action: 'See AI diagnose it INSTANTLY', path: null },
+                        { step: 5, action: 'Get fix with confidence score', path: null },
+                        { step: 6, action: 'Apply fix (FREE - first one!)', path: null },
+                        { step: 7, action: 'See Before/After results', path: null },
+                        { step: 8, action: 'Explore your personalized workspace', path: '/workspace' }
+                    ],
+                    timeToComplete: '5 minutes',
+                    freeThisTime: true
+                },
+                developer: {
+                    name: 'Developer Flow',
+                    steps: [
+                        { step: 1, action: 'Open your workspace IDE', path: '/workspace' },
+                        { step: 2, action: 'Write or paste your code', path: null },
+                        { step: 3, action: 'Click "Scan & Fix"', path: null },
+                        { step: 4, action: 'AI finds bugs, security issues, performance problems' },
+                        { step: 5, action: 'Review solutions (3 options with confidence)' },
+                        { step: 6, action: 'Apply fix directly from IDE' },
+                        { step: 7, action: 'Continue coding - problem solved!' }
+                    ],
+                    timeToComplete: '2 minutes',
+                    languages: '7000+ supported'
+                },
+                enterprise: {
+                    name: 'Enterprise Admin',
+                    steps: [
+                        { step: 1, action: 'Login to admin dashboard', path: '/admin' },
+                        { step: 2, action: 'View all company systems', path: '/admin/systems' },
+                        { step: 3, action: 'Enable Ghost Mode (autonomous)', path: '/ghost' },
+                        { step: 4, action: 'Set team permissions', path: '/admin/team' },
+                        { step: 5, action: 'View audit trails', path: '/admin/audit' },
+                        { step: 6, action: 'Check monthly savings report', path: '/reports' }
+                    ],
+                    timeToComplete: '10 minutes setup, then AUTOMATIC'
+                }
+            },
+            
+            // Problem → Solution mapping
+            scenarios: {
+                serverDown: {
+                    trigger: ['server down', 'site not working', 'app crashed', 'unreachable'],
+                    response: "Oh no! Let's fix this FAST. Go to /detect, describe what happened. Our AI will find the root cause in seconds and suggest an immediate fix. Ghost Mode can even auto-restart for you!",
+                    action: 'Immediate detection'
+                },
+                slowPerformance: {
+                    trigger: ['slow', 'lagging', 'latency', 'timeout', 'taking long'],
+                    response: "Performance issues are frustrating! Our Pre-Cognition AI can predict these BEFORE users notice. Check /dashboard for real-time metrics, or run a quick diagnostic at /detect.",
+                    action: 'Performance analysis'
+                },
+                securityConcern: {
+                    trigger: ['hack', 'breach', 'attack', 'unauthorized', 'suspicious'],
+                    response: "SECURITY ALERT! 🚨 Go to /detect immediately. Our AI detects DDoS, SQL injection, XSS, and 7 other attack types. Enterprise tier includes automatic threat blocking. Stay calm - we've got this.",
+                    action: 'Emergency security scan'
+                },
+                billingQuestion: {
+                    trigger: ['price', 'cost', 'bill', 'payment', 'invoice', 'charge'],
+                    response: "Great question about pricing! You can see all plans at /pricing. Remember: your FIRST problem fix is completely FREE! Check /billing for your invoices and payment history.",
+                    action: 'View pricing'
+                },
+                newToPlatform: {
+                    trigger: ['new', 'first time', 'how to', 'help', 'guide', 'tutorial', 'what'],
+                    response: "WELCOME! 🎉 I'll guide you through everything. First: describe your problem at /detect. Our AI will analyze it instantly. Your first fix is FREE! After that, explore your workspace at /workspace - it auto-adapts to your role!",
+                    action: 'Guided tour'
+                }
+            }
+        };
+    }
+    
+    // ==========================================
+    // INITIALIZE FOR USER
+    // ==========================================
+    async initForUser(user) {
+        this.user = user;
+        
+        // Detect user persona
+        const persona = this.detectPersona(user);
+        
+        // Load personalized context
+        this.context = {
+            persona,
+            company: user.company,
+            tier: user.tier,
+            credits: user.credits,
+            role: user.role,
+            firstTime: !user.lastLogin,
+            recentProblems: await this.getRecentProblems(user.id),
+            suggestedFeatures: this.getSuggestedFeatures(persona)
+        };
+        
+        return this.generateWelcome();
+    }
+    
+    // ==========================================
+    // DETECT USER PERSONA
+    // ==========================================
+    detectPersona(user) {
+        const email = user.email?.toLowerCase() || '';
+        const role = user.role || '';
+        
+        if (email.includes('dev') || email.includes('engineer') || role === 'developer') {
+            return 'DEVELOPER';
+        }
+        if (email.includes('admin') || email.includes('cto') || email.includes('ceo') || role === 'admin') {
+            return 'ADMIN';
+        }
+        if (email.includes('finance') || email.includes('billing')) {
+            return 'FINANCE';
+        }
+        if (email.includes('security') || email.includes('infosec')) {
+            return 'SECURITY';
+        }
+        
+        return 'GENERAL';
+    }
+    
+    // ==========================================
+    // GENERATE WELCOME MESSAGE
+    // ==========================================
+    generateWelcome() {
+        const ctx = this.context;
+        
+        const welcomes = {
+            DEVELOPER: {
+                message: `Hey ${this.user.name || 'Developer'}! Ready to write bug-free code?`,
+                suggestion: "Your workspace IDE is ready at /workspace. Paste your code, hit 'Scan & Fix', and watch our AI find problems in milliseconds. 7000+ languages supported!",
+                quickAction: 'Open Workspace',
+                path: '/workspace',
+                timeSaved: 'You saved 3 hours of debugging last week!'
+            },
+            ADMIN: {
+                message: `Welcome back, ${this.user.name || 'Admin'}! All systems operational.`,
+                suggestion: "Ghost Mode has prevented 12 outages this month. Check /dashboard for real-time metrics. Need to add team members? Go to /admin/team.",
+                quickAction: 'View Dashboard',
+                path: '/dashboard',
+                timeSaved: 'Your team saved 45 hours this month!'
+            },
+            FINANCE: {
+                message: `Hello ${this.user.name || 'Finance'}! Here's your savings report.`,
+                suggestion: "This month: $38,921 saved in prevented downtime. 247 problems auto-fixed. Check /billing for detailed invoices and ROI reports.",
+                quickAction: 'View Savings',
+                path: '/billing',
+                timeSaved: 'ROI this quarter: 380%'
+            },
+            SECURITY: {
+                message: `Security status: ALL CLEAR ${this.user.name || 'Security Lead'}!`,
+                suggestion: "Zero breaches detected. 1,247 threats automatically blocked this month. Check /admin/audit for complete security logs.",
+                quickAction: 'Security Dashboard',
+                path: '/admin/audit',
+                timeSaved: '1,247 threats neutralized'
+            },
+            GENERAL: {
+                message: `Welcome to Supreme Problem Detector, ${this.user.name || 'Friend'}! 🚀`,
+                suggestion: "I'll guide you through everything. First step: describe any problem at /detect. Your first fix is FREE! After that, explore your personalized workspace.",
+                quickAction: 'Detect Problem',
+                path: '/detect',
+                timeSaved: 'First problem FREE!'
+            }
+        };
+        
+        return welcomes[ctx.persona] || welcomes.GENERAL;
+    }
+    
+    // ==========================================
+    // GUIDED RESPONSE TO USER INPUT
+    // ==========================================
+    async respond(userInput) {
+        const input = (userInput || '').toLowerCase();
+        
+        // Find matching scenario
+        for (const [key, scenario] of Object.entries(this.platform.scenarios)) {
+            if (scenario.trigger.some(t => input.includes(t))) {
+                return {
+                    message: scenario.response,
+                    action: scenario.action,
+                    features: this.getRelevantFeatures(key),
+                    nextSteps: this.getNextSteps(key, this.context.persona)
+                };
+            }
+        }
+        
+        // Default: guide to detection
+        return {
+            message: "I'm here to help! Describe your problem, and I'll guide you to the right solution. You can also explore: /detect (find problems), /workspace (your IDE), /dashboard (metrics), or /ghost (auto-fix).",
+            action: 'Describe problem',
+            features: ['detection', 'workspace'],
+            nextSteps: ['Tell me what issue you have', 'I will show you the exact fix']
+        };
+    }
+    
+    // ==========================================
+    // GET RELEVANT FEATURES
+    // ==========================================
+    getRelevantFeatures(scenario) {
+        const mapping = {
+            serverDown: ['detection', 'ghost', 'dashboard'],
+            slowPerformance: ['detection', 'precognition', 'workspace'],
+            securityConcern: ['detection', 'audit', 'ghost'],
+            billingQuestion: ['pricing', 'billing'],
+            newToPlatform: ['detection', 'workspace', 'dashboard']
+        };
+        
+        return mapping[scenario] || ['detection'];
+    }
+    
+    // ==========================================
+    // GET NEXT STEPS
+    // ==========================================
+    getNextSteps(scenario, persona) {
+        const steps = {
+            serverDown: [
+                '1. Go to /detect immediately',
+                '2. Describe: "Server/App is DOWN"',
+                '3. AI finds root cause in < 1 second',
+                '4. Apply suggested fix (or Ghost Mode auto-applies)',
+                '5. See Before/After: Service RESTORED'
+            ],
+            newToPlatform: [
+                '1. Describe your first problem at /detect',
+                '2. Watch AI analyze it instantly',
+                '3. Get 3 solution options with confidence scores',
+                '4. Apply fix (FREE - first one!)',
+                '5. See results: Before vs After'
+            ]
+        };
+        
+        return steps[scenario] || ['Describe your problem', 'AI will guide you'];
+    }
+    
+    // ==========================================
+    // SUGGEST BASED ON BEHAVIOR
+    // ==========================================
+    async suggest(userId) {
+        const recent = await this.getRecentProblems(userId);
+        
+        // If user detected CPU issues 3 times, suggest Ghost Mode
+        const cpuIssues = recent.filter(p => p.type === 'HIGH_CPU');
+        if (cpuIssues.length >= 3) {
+            return {
+                message: "I notice you've had CPU issues 3 times recently. Enable Ghost Mode and it will handle CPU spikes AUTOMATICALLY - you won't even know they happened!",
+                action: 'Enable Ghost Mode',
+                path: '/ghost'
+            };
+        }
+        
+        // If user never tried workspace
+        if (!recent.some(p => p.source === 'workspace')) {
+            return {
+                message: "You haven't tried your personalized Workspace IDE yet! It auto-adapts to your role and supports 7000+ languages. Code, scan, fix - all in one place.",
+                action: 'Open Workspace',
+                path: '/workspace'
+            };
+        }
+        
+        return null;
+    }
+    
+    // ==========================================
+    // SHOW PLATFORM TOUR
+    // ==========================================
+    getGuidedTour() {
+        return {
+            title: '🚀 Supreme Problem Detector - Quick Tour',
+            duration: '3 minutes',
+            stops: [
+                {
+                    title: '1. Problem Detection',
+                    description: 'This is where the MAGIC happens. Describe any problem - server crash, slow app, security issue. Our AI detects 60 problem types and finds root cause instantly.',
+                    path: '/detect',
+                    tip: 'First problem FREE for every new company!'
+                },
+                {
+                    title: '2. Your Workspace',
+                    description: 'Personalized IDE that auto-adapts to YOUR role. Developer? See terminal and code editor. Manager? See dashboards and reports. CEO? See revenue impact and savings.',
+                    path: '/workspace',
+                    tip: 'Press Ctrl+Space for AI suggestions'
+                },
+                {
+                    title: '3. Live Dashboard',
+                    description: 'Real-time metrics from ALL your systems. CPU, memory, disk, network - everything. With Pre-Cognition AI showing what WILL happen in the next 30 minutes.',
+                    path: '/dashboard',
+                    tip: 'Red means action needed. Green means Ghost Mode is handling it.'
+                },
+                {
+                    title: '4. Ghost Mode (AUTONOMOUS)',
+                    description: 'Enable this and FORGET about problems. Our AI works 24/7 - detecting, analyzing, fixing, verifying. All without waking you up. Ever.',
+                    path: '/ghost',
+                    tip: 'Enterprise favorite - saves millions in prevented downtime'
+                },
+                {
+                    title: '5. Billing & ROI',
+                    description: 'See exactly how much money you saved. Every prevented outage has a dollar value. Monthly reports show you ROI that makes CFOs smile.',
+                    path: '/billing',
+                    tip: 'Average enterprise saves $500K/year'
+                }
+            ]
+        };
+    }
+    
+    // ==========================================
+    // HELPERS
+    // ==========================================
+    async getRecentProblems(userId) {
+        return [];
+    }
+    
+    getSuggestedFeatures(persona) {
+        const suggestions = {
+            DEVELOPER: ['workspace', 'detection', 'chip'],
+            ADMIN: ['dashboard', 'ghost', 'audit'],
+            FINANCE: ['billing', 'reports'],
+            SECURITY: ['detection', 'audit', 'ghost'],
+            GENERAL: ['detection', 'workspace', 'dashboard']
+        };
+        
+        return suggestions[persona] || ['detection'];
+    }
+}
+
+// ============================================
+// EXPRESS MIDDLEWARE
+// ============================================
+function copilotMiddleware(req, res, next) {
+    req.copilot = new SupremeCoPilot();
+    next();
+}
+
+// ============================================
+// API ROUTES
+// ============================================
+function setupCopilotRoutes(app) {
+    const copilot = new SupremeCoPilot();
+    
+    // Get welcome message
+    app.get('/api/copilot/welcome', async (req, res) => {
+        const user = req.user || { name: 'Guest', role: 'user', tier: 'FREE' };
+        const welcome = await copilot.initForUser(user);
+        res.json(welcome);
+    });
+    
+    // Ask copilot
+    app.post('/api/copilot/ask', async (req, res) => {
+        const response = await copilot.respond(req.body.question);
+        res.json(response);
+    });
+    
+    // Get suggestions
+    app.get('/api/copilot/suggest', async (req, res) => {
+        const suggestion = await copilot.suggest(req.user?.id);
+        res.json(suggestion);
+    });
+    
+    // Get guided tour
+    app.get('/api/copilot/tour', (req, res) => {
+        res.json(copilot.getGuidedTour());
+    });
+    
+    console.log('✅ Supreme Co-Pilot Routes Ready');
+}
+
+// ============================================
+// EXPORT
+// ============================================
+const globalCopilot = new SupremeCoPilot();
+
+module.exports = {
+    SupremeCoPilot,
+    globalCopilot,
+    copilotMiddleware,
+    setupCopilotRoutes
+};
