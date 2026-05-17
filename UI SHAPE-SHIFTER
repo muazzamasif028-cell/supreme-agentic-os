@@ -1,1 +1,300 @@
+// ============================================
+// UI SHAPE-SHIFTER
+// Auto-adapting interface based on user role
+// ============================================
+
+class UIShapeShifter {
+    
+    constructor() {
+        this.personas = new Map();
+        this.layouts = this.loadLayouts();
+        this.roleDetector = new RoleDetector();
+    }
+    
+    // ==========================================
+    // AUTO-DETECT USER TYPE
+    // ==========================================
+    async transformInterface(user) {
+        console.log(`🎭 Shape-shifting UI for: ${user.email}`);
+        
+        // Step 1: Detect user role from email + behavior
+        const persona = await this.roleDetector.detectPersona(user);
+        
+        // Step 2: Load role-specific layout
+        const layout = this.loadLayoutForPersona(persona);
+        
+        // Step 3: Apply company branding
+        const brandedLayout = this.applyCompanyBranding(layout, user.company);
+        
+        // Step 4: Generate adaptive UI
+        const adaptiveUI = this.generateAdaptiveUI(brandedLayout, persona);
+        
+        return {
+            persona: persona.type,
+            layout: persona.layout,
+            features: persona.features,
+            ui: adaptiveUI,
+            message: `Interface adapted for ${persona.type}`
+        };
+    }
+    
+    // ==========================================
+    // PERSONA DETECTION
+    // ==========================================
+    loadLayoutForPersona(persona) {
+        const layouts = {
+            ACCOUNTANT: {
+                name: 'Financial Dashboard',
+                theme: 'professional-light',
+                widgets: ['ledger', 'invoices', 'tax-reports', 'expenses'],
+                charts: ['bar-charts', 'pie-charts', 'balance-sheets'],
+                hideElements: ['code-editor', 'terminal', 'debugger'],
+                shortcuts: ['Ctrl+B = Balance Sheet', 'Ctrl+I = Invoice']
+            },
+            DEVELOPER: {
+                name: 'Developer Terminal',
+                theme: 'vs-dark',
+                widgets: ['code-editor', 'terminal', 'debugger', 'git-panel'],
+                charts: ['performance-graphs', 'error-logs', 'cpu-meters'],
+                hideElements: ['ledger', 'invoices', 'tax-forms'],
+                shortcuts: ['Ctrl+` = Terminal', 'Ctrl+D = Debug']
+            },
+            MANAGER: {
+                name: 'Management Cockpit',
+                theme: 'enterprise-blue',
+                widgets: ['team-overview', 'kpi-dashboard', 'reports', 'approvals'],
+                charts: ['burn-down', 'velocity', 'roadmap'],
+                hideElements: ['terminal', 'raw-logs'],
+                shortcuts: ['Ctrl+R = Reports', 'Ctrl+A = Approvals']
+            },
+            CEO: {
+                name: 'Executive View',
+                theme: 'dark-premium',
+                widgets: ['revenue', 'growth', 'market-share', 'competitors'],
+                charts: ['revenue-trend', 'user-growth', 'profit-margins'],
+                hideElements: ['code-editor', 'terminal', 'debug-logs'],
+                shortcuts: ['Ctrl+M = Metrics', 'Ctrl+G = Growth']
+            },
+            SECURITY_ANALYST: {
+                name: 'Security Command Center',
+                theme: 'matrix-dark',
+                widgets: ['threat-map', 'intrusion-logs', 'vulnerability-scanner', 'firewall-status'],
+                charts: ['attack-vectors', 'risk-heatmap', 'compliance-score'],
+                hideElements: ['ledger', 'marketing-tools'],
+                shortcuts: ['Ctrl+T = Threats', 'Ctrl+L = Lockdown']
+            }
+        };
+        
+        return layouts[persona.type] || layouts.DEVELOPER;
+    }
+    
+    // ==========================================
+    // ADAPTIVE UI GENERATOR
+    // ==========================================
+    generateAdaptiveUI(layout, persona) {
+        return `
+<!DOCTYPE html>
+<html>
+<head>
+    <title>${layout.name} - ${persona.companyName}</title>
+    <style>
+        :root {
+            --persona-primary: ${persona.colors.primary};
+            --persona-bg: ${persona.colors.background};
+            --persona-text: ${persona.colors.text};
+        }
+        
+        body {
+            background: var(--persona-bg);
+            color: var(--persona-text);
+            font-family: '${persona.preferences.font || 'Segoe UI'}', sans-serif;
+            transition: all 0.5s ease;
+        }
+        
+        /* Widget visibility based on persona */
+        ${layout.hideElements.map(el => `
+        .widget-${el} { display: none !important; }
+        `).join('\n')}
+        
+        /* Role-specific shortcuts bar */
+        .shortcuts-bar {
+            background: var(--persona-primary);
+            color: white;
+            padding: 8px 15px;
+            font-size: 12px;
+            display: flex;
+            gap: 15px;
+        }
+        
+        .shortcut-key {
+            background: rgba(255,255,255,0.2);
+            padding: 3px 8px;
+            border-radius: 4px;
+        }
+    </style>
+</head>
+<body>
+    <!-- Adaptive Header -->
+    <header class="persona-header">
+        <div class="persona-badge">
+            <span class="role-icon">${persona.icon}</span>
+            <span>${persona.type.replace('_', ' ')}</span>
+        </div>
+        <div class="company-brand">
+            ${persona.companyLogo}
+            <span>${persona.companyName}</span>
+        </div>
+    </header>
+    
+    <!-- Adaptive Widgets -->
+    <div class="widget-grid">
+        ${layout.widgets.map(w => `
+        <div class="widget widget-${w}" data-widget="${w}">
+            <h3>${w.replace(/-/g, ' ').toUpperCase()}</h3>
+            <div class="widget-content" id="widget-${w}">
+                <!-- Dynamic content based on persona -->
+            </div>
+        </div>
+        `).join('')}
+    </div>
+    
+    <!-- Adaptive Charts -->
+    <div class="charts-area">
+        ${layout.charts.map(c => `
+        <div class="chart-container">
+            <canvas id="chart-${c}"></canvas>
+        </div>
+        `).join('')}
+    </div>
+    
+    <!-- Shortcuts Bar -->
+    <div class="shortcuts-bar">
+        ${layout.shortcuts.map(s => `
+        <span><span class="shortcut-key">${s.split('=')[0].trim()}</span> ${s.split('=')[1].trim()}</span>
+        `).join('')}
+    </div>
+    
+    <script>
+        // Auto-apply persona settings
+        document.documentElement.style.setProperty(
+            '--persona-primary', '${persona.colors.primary}'
+        );
+        
+        // Load role-specific data
+        loadPersonaData('${persona.type}');
+        
+        function loadPersonaData(role) {
+            const dataEndpoints = {
+                'ACCOUNTANT': '/api/financial-data',
+                'DEVELOPER': '/api/system-metrics',
+                'MANAGER': '/api/team-kpis',
+                'CEO': '/api/executive-summary'
+            };
+            
+            fetch(dataEndpoints[role] || '/api/default-view')
+                .then(res => res.json())
+                .then(data => renderWidgets(data));
+        }
+    </script>
+</body>
+</html>`;
+    }
+    
+    // ==========================================
+    // COMPANY BRANDING
+    // ==========================================
+    applyCompanyBranding(layout, company) {
+        return {
+            ...layout,
+            colors: {
+                primary: company.branding?.primaryColor || '#f5576c',
+                secondary: company.branding?.secondaryColor || '#f093fb',
+                background: company.branding?.darkMode ? '#0a0a1a' : '#ffffff',
+                text: company.branding?.darkMode ? '#e0e0e0' : '#333333'
+            },
+            logo: company.branding?.logo || '🛡️',
+            companyName: company.name
+        };
+    }
+}
+
+// ==========================================
+// ROLE DETECTOR
+// ==========================================
+class RoleDetector {
+    
+    async detectPersona(user) {
+        // Detect from email patterns
+        const email = user.email.toLowerCase();
+        
+        const rolePatterns = {
+            ACCOUNTANT: ['accountant', 'finance', 'accounts', 'billing', 'invoice', 'tax', 'audit', 'bookkeeping'],
+            DEVELOPER: ['dev', 'developer', 'engineer', 'programmer', 'coder', 'tech', 'software', 'backend', 'frontend', 'fullstack'],
+            MANAGER: ['manager', 'lead', 'head', 'director', 'pm', 'product', 'project', 'scrum'],
+            CEO: ['ceo', 'founder', 'chief', 'president', 'owner', 'executive'],
+            SECURITY_ANALYST: ['security', 'sec', 'infosec', 'cyber', 'hacker', 'audit', 'compliance']
+        };
+        
+        for (const [role, keywords] of Object.entries(rolePatterns)) {
+            if (keywords.some(k => email.includes(k) || user.title?.toLowerCase().includes(k))) {
+                return this.buildPersona(role, user);
+            }
+        }
+        
+        // Default: Developer
+        return this.buildPersona('DEVELOPER', user);
+    }
+    
+    buildPersona(role, user) {
+        const personaConfigs = {
+            ACCOUNTANT: {
+                type: 'ACCOUNTANT',
+                icon: '🧮',
+                layout: 'financial',
+                colors: { primary: '#2196F3', background: '#ffffff', text: '#333' },
+                preferences: { font: 'Roboto', fontSize: '14px' },
+                features: ['ledger', 'invoices', 'reports'],
+                companyName: user.company || 'Company'
+            },
+            DEVELOPER: {
+                type: 'DEVELOPER',
+                icon: '💻',
+                layout: 'terminal',
+                colors: { primary: '#4CAF50', background: '#1e1e1e', text: '#d4d4d4' },
+                preferences: { font: 'Fira Code', fontSize: '13px' },
+                features: ['editor', 'terminal', 'debugger'],
+                companyName: user.company || 'Company'
+            },
+            MANAGER: {
+                type: 'MANAGER',
+                icon: '📊',
+                layout: 'dashboard',
+                colors: { primary: '#FF9800', background: '#fafafa', text: '#333' },
+                preferences: { font: 'Segoe UI', fontSize: '14px' },
+                features: ['kpi', 'team', 'reports'],
+                companyName: user.company || 'Company'
+            },
+            CEO: {
+                type: 'CEO',
+                icon: '👑',
+                layout: 'executive',
+                colors: { primary: '#9C27B0', background: '#1a1a2e', text: '#eee' },
+                preferences: { font: 'Montserrat', fontSize: '15px' },
+                features: ['revenue', 'growth', 'strategy'],
+                companyName: user.company || 'Company'
+            },
+            SECURITY_ANALYST: {
+                type: 'SECURITY_ANALYST',
+                icon: '🔒',
+                layout: 'command',
+                colors: { primary: '#00ff00', background: '#000000', text: '#00ff00' },
+                preferences: { font: 'Courier New', fontSize: '12px' },
+                features: ['threats', 'logs', 'firewall'],
+                companyName: user.company || 'Company'
+            }
+        };
+        
+        return personaConfigs[role] || personaConfigs.DEVELOPER;
+    }
+}
 
