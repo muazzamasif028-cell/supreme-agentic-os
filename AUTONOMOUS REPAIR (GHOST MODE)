@@ -228,4 +228,3 @@ class GhostAutoHealer {
 // EXPORT
 // ============================================
 module.exports = { GhostAutoHealer };
-
