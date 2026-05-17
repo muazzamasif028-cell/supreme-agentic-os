@@ -1,1 +1,10 @@
+const express = require('express');
+const router = express.Router();
 
+const solveRoutes = require('./solve.routes');
+const executeRoutes = require('./execute.routes');
+
+router.use('/solve', solveRoutes);
+router.use('/execute', executeRoutes);
+
+module.exports = router;
