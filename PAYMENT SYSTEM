@@ -1,1 +1,732 @@
+// ============================================
+// COMPLETE PAYMENT SYSTEM
+// Problem Solve → Auto Charge → Full Billing
+// ============================================
+
+const stripe = require('stripe')(process.env.STRIPE_SECRET_KEY);
+const crypto = require('crypto');
+
+class FullPaymentSystem {
+    
+    constructor() {
+        this.plans = this.initPlans();
+        this.transactions = [];
+        this.subscriptions = new Map();
+        this.invoices = [];
+        this.paymentMethods = new Map();
+    }
+    
+    // ==========================================
+    // PRICING PLANS
+    // ==========================================
+    initPlans() {
+        return {
+            FREE: {
+                name: 'Free Tier',
+                price: 0,
+                features: ['1 scan', 'Basic detection', 'Email support'],
+                trialDays: 0
+            },
+            STARTER: {
+                name: 'Starter',
+                monthlyPrice: 29,
+                yearlyPrice: 290,
+                perProblemPrice: 19,
+                features: ['10 scans/month', 'Basic fix', 'Chat support'],
+                stripePriceId: 'price_starter_monthly'
+            },
+            PRO: {
+                name: 'Professional',
+                monthlyPrice: 99,
+                yearlyPrice: 990,
+                perProblemPrice: 49,
+                features: ['Unlimited scans', 'Auto-fix', 'Priority support', 'API access'],
+                stripePriceId: 'price_pro_monthly'
+            },
+            BUSINESS: {
+                name: 'Business',
+                monthlyPrice: 499,
+                yearlyPrice: 4990,
+                perProblemPrice: 149,
+                features: ['Everything in Pro', 'Team access', 'Custom integrations', 'SLA 99.9%'],
+                stripePriceId: 'price_business_monthly'
+            },
+            ENTERPRISE: {
+                name: 'Enterprise',
+                customPricing: true,
+                features: ['Everything in Business', 'Dedicated support', 'On-premise', 'SLA 99.99%'],
+                contactSales: true
+            }
+        };
+    }
+    
+    // ==========================================
+    // 1. SUBSCRIPTION MANAGEMENT
+    // ==========================================
+    async createSubscription(userId, planName, paymentMethodId) {
+        console.log(`\n💳 Creating subscription: ${planName} for user ${userId}`);
+        
+        const plan = this.plans[planName];
+        if (!plan) return { error: 'Invalid plan' };
+        
+        try {
+            // Create Stripe customer if not exists
+            let customer = await this.getOrCreateCustomer(userId);
+            
+            // Attach payment method
+            await stripe.paymentMethods.attach(paymentMethodId, {
+                customer: customer.id
+            });
+            
+            // Set as default
+            await stripe.customers.update(customer.id, {
+                invoice_settings: {
+                    default_payment_method: paymentMethodId
+                }
+            });
+            
+            // Create subscription
+            const subscription = await stripe.subscriptions.create({
+                customer: customer.id,
+                items: [{ price: plan.stripePriceId }],
+                payment_behavior: 'default_incomplete',
+                expand: ['latest_invoice.payment_intent'],
+                metadata: {
+                    userId,
+                    plan: planName
+                }
+            });
+            
+            // Store locally
+            this.subscriptions.set(userId, {
+                userId,
+                plan: planName,
+                stripeCustomerId: customer.id,
+                stripeSubscriptionId: subscription.id,
+                status: subscription.status,
+                startedAt: new Date(),
+                renewsAt: new Date(subscription.current_period_end * 1000),
+                paymentMethod: {
+                    last4: '4242',
+                    brand: 'Visa',
+                    expMonth: 12,
+                    expYear: 2026
+                }
+            });
+            
+            return {
+                success: true,
+                subscription: {
+                    id: subscription.id,
+                    plan: planName,
+                    status: subscription.status,
+                    amount: plan.monthlyPrice,
+                    currency: 'USD',
+                    nextBilling: new Date(subscription.current_period_end * 1000)
+                }
+            };
+            
+        } catch (error) {
+            console.error('Subscription error:', error);
+            return { error: error.message };
+        }
+    }
+    
+    // ==========================================
+    // 2. ONE-TIME PAYMENT (Per Problem Fix)
+    // ==========================================
+    async chargePerProblem(userId, problemDetails) {
+        console.log(`\n💰 Charging for problem: ${problemDetails.id}`);
+        
+        const user = await this.getUserById(userId);
+        const plan = this.plans[user.tier] || this.plans.FREE;
+        
+        // Check free credits
+        const freeCredits = await this.getFreeCredits(userId);
+        
+        if (freeCredits > 0) {
+            // Use free credit
+            await this.useFreeCredit(userId);
+            
+            return {
+                success: true,
+                charged: false,
+                message: '🎁 Free credit used!',
+                remainingCredits: freeCredits - 1,
+                amount: 0,
+                invoice: null
+            };
+        }
+        
+        // Calculate price
+        const price = this.calculateProblemPrice(problemDetails, user);
+        
+        try {
+            // Process payment
+            const paymentIntent = await stripe.paymentIntents.create({
+                amount: Math.round(price.total * 100), // Cents
+                currency: 'usd',
+                customer: user.stripeCustomerId,
+                payment_method: user.defaultPaymentMethod,
+                off_session: true,
+                confirm: true,
+                metadata: {
+                    userId,
+                    problemId: problemDetails.id,
+                    problemType: problemDetails.type,
+                    severity: problemDetails.severity
+                },
+                description: `Problem Fix: ${problemDetails.type} (${problemDetails.severity})`
+            });
+            
+            // Generate invoice
+            const invoice = await this.generateInvoice(userId, problemDetails, price);
+            
+            // Record transaction
+            const transaction = {
+                id: 'TXN-' + Date.now().toString(36),
+                userId,
+                problemId: problemDetails.id,
+                type: 'PROBLEM_FIX',
+                amount: price.total,
+                currency: 'USD',
+                breakdown: price.breakdown,
+                stripePaymentIntentId: paymentIntent.id,
+                status: paymentIntent.status,
+                timestamp: new Date(),
+                invoiceId: invoice.id
+            };
+            
+            this.transactions.push(transaction);
+            
+            // Auto-upgrade if high usage
+            await this.checkAutoUpgrade(userId);
+            
+            return {
+                success: true,
+                charged: true,
+                amount: price.total,
+                currency: 'USD',
+                breakdown: price.breakdown,
+                paymentIntentId: paymentIntent.id,
+                invoice: {
+                    id: invoice.id,
+                    url: invoice.url,
+                    pdf: invoice.pdf
+                }
+            };
+            
+        } catch (error) {
+            console.error('Payment error:', error);
+            
+            // Retry with customer confirmation
+            if (error.code === 'authentication_required') {
+                return {
+                    success: false,
+                    requiresAction: true,
+                    paymentIntentId: error.payment_intent.id,
+                    clientSecret: error.payment_intent.client_secret,
+                    nextAction: 'confirm_payment'
+                };
+            }
+            
+            return { error: error.message };
+        }
+    }
+    
+    // ==========================================
+    // 3. CALCULATE PRICE (Dynamic)
+    // ==========================================
+    calculateProblemPrice(problem, user) {
+        const basePrice = {
+            CRITICAL: { diagnosis: 500, fix: 2000, full: 5000 },
+            HIGH: { diagnosis: 200, fix: 800, full: 2000 },
+            MEDIUM: { diagnosis: 100, fix: 400, full: 1000 },
+            LOW: { diagnosis: 50, fix: 200, full: 500 }
+        };
+        
+        const severity = problem.severity || 'MEDIUM';
+        const price = basePrice[severity];
+        
+        // Bulk discount
+        const monthlyProblems = this.getMonthlyProblemCount(user.id);
+        let discount = 0;
+        if (monthlyProblems > 50) discount = 30;
+        else if (monthlyProblems > 20) discount = 20;
+        else if (monthlyProblems > 10) discount = 10;
+        
+        // Subscription discount
+        if (user.tier === 'PRO') discount += 15;
+        if (user.tier === 'BUSINESS') discount += 25;
+        
+        const subtotal = problem.type === 'diagnosis' ? price.diagnosis :
+                        problem.type === 'fix' ? price.fix : price.full;
+        
+        const discountAmount = Math.round(subtotal * discount / 100);
+        const total = subtotal - discountAmount;
+        
+        return {
+            subtotal,
+            discount: discountAmount,
+            discountPercent: discount,
+            total,
+            breakdown: {
+                service: problem.type || 'diagnosis',
+                severity: severity,
+                basePrice: subtotal,
+                discount: `${discount}% (-$${discountAmount})`,
+                tax: 'Included',
+                total: total
+            }
+        };
+    }
+    
+    // ==========================================
+    // 4. INVOICE GENERATION
+    // ==========================================
+    async generateInvoice(userId, problem, price) {
+        const invoice = {
+            id: 'INV-' + Date.now().toString(36).toUpperCase(),
+            userId,
+            date: new Date().toISOString(),
+            dueDate: new Date(Date.now() + 30 * 86400000).toISOString(),
+            items: [
+                {
+                    description: `Problem ${problem.type} - ${problem.severity}`,
+                    type: problem.type || 'diagnosis',
+                    quantity: 1,
+                    unitPrice: price.breakdown.basePrice,
+                    discount: price.breakdown.discount,
+                    total: price.total
+                }
+            ],
+            subtotal: price.subtotal,
+            discount: price.discount,
+            tax: 0,
+            total: price.total,
+            currency: 'USD',
+            status: price.total === 0 ? 'PAID' : 'PENDING',
+            paymentLink: price.total > 0 ? 
+                `https://pay.supreme-detector.com/invoice/${invoice.id}` : null,
+            pdfUrl: `/api/invoices/${invoice.id}/pdf`
+        };
+        
+        this.invoices.push(invoice);
+        return invoice;
+    }
+    
+    // ==========================================
+    // 5. FREE CREDIT SYSTEM
+    // ==========================================
+    async getFreeCredits(userId) {
+        const user = await this.getUserById(userId);
+        return user.freeCredits || 0;
+    }
+    
+    async useFreeCredit(userId) {
+        const user = await this.getUserById(userId);
+        user.freeCredits = Math.max(0, (user.freeCredits || 0) - 1);
+        await this.updateUser(user);
+    }
+    
+    async addFreeCredits(userId, amount, reason) {
+        const user = await this.getUserById(userId);
+        user.freeCredits = (user.freeCredits || 0) + amount;
+        user.creditHistory = user.creditHistory || [];
+        user.creditHistory.push({
+            amount,
+            reason,
+            timestamp: new Date()
+        });
+        await this.updateUser(user);
+        
+        return {
+            success: true,
+            totalCredits: user.freeCredits,
+            added: amount,
+            reason
+        };
+    }
+    
+    // ==========================================
+    // 6. BILLING & INVOICING
+    // ==========================================
+    async getBillingHistory(userId) {
+        const userTransactions = this.transactions.filter(t => t.userId === userId);
+        const userInvoices = this.invoices.filter(i => i.userId === userId);
+        
+        return {
+            totalSpent: userTransactions.reduce((sum, t) => sum + t.amount, 0),
+            transactions: userTransactions.slice(-50),
+            invoices: userInvoices.slice(-20),
+            currentMonth: {
+                spent: this.getCurrentMonthSpending(userId),
+                problems: this.getMonthlyProblemCount(userId),
+                averageCost: this.getAverageProblemCost(userId)
+            }
+        };
+    }
+    
+    getCurrentMonthSpending(userId) {
+        const now = new Date();
+        const monthStart = new Date(now.getFullYear(), now.getMonth(), 1);
+        
+        return this.transactions
+            .filter(t => t.userId === userId && new Date(t.timestamp) >= monthStart)
+            .reduce((sum, t) => sum + t.amount, 0);
+    }
+    
+    getMonthlyProblemCount(userId) {
+        const now = new Date();
+        const monthStart = new Date(now.getFullYear(), now.getMonth(), 1);
+        
+        return this.transactions
+            .filter(t => t.userId === userId && new Date(t.timestamp) >= monthStart)
+            .length;
+    }
+    
+    getAverageProblemCost(userId) {
+        const count = this.getMonthlyProblemCount(userId);
+        const spent = this.getCurrentMonthSpending(userId);
+        return count > 0 ? Math.round(spent / count) : 0;
+    }
+    
+    // ==========================================
+    // 7. PAYMENT METHODS
+    // ==========================================
+    async addPaymentMethod(userId, paymentDetails) {
+        const methods = ['CREDIT_CARD', 'DEBIT_CARD', 'BANK_TRANSFER', 'PAYPAL', 'CRYPTO'];
+        
+        const method = {
+            id: 'PM-' + Date.now().toString(36),
+            userId,
+            type: paymentDetails.type || 'CREDIT_CARD',
+            last4: paymentDetails.number?.slice(-4) || '4242',
+            brand: paymentDetails.brand || 'Visa',
+            expMonth: paymentDetails.expMonth || 12,
+            expYear: paymentDetails.expYear || 2026,
+            isDefault: paymentDetails.isDefault || false,
+            billingAddress: paymentDetails.billingAddress || {},
+            createdAt: new Date()
+        };
+        
+        const userMethods = this.paymentMethods.get(userId) || [];
+        userMethods.push(method);
+        this.paymentMethods.set(userId, userMethods);
+        
+        return {
+            success: true,
+            paymentMethod: {
+                id: method.id,
+                type: method.type,
+                last4: method.last4,
+                brand: method.brand
+            }
+        };
+    }
+    
+    async getPaymentMethods(userId) {
+        return this.paymentMethods.get(userId) || [];
+    }
+    
+    async setDefaultPaymentMethod(userId, methodId) {
+        const methods = this.paymentMethods.get(userId) || [];
+        methods.forEach(m => m.isDefault = (m.id === methodId));
+        this.paymentMethods.set(userId, methods);
+        
+        return { success: true };
+    }
+    
+    // ==========================================
+    // 8. AUTO-UPGRADE CHECK
+    // ==========================================
+    async checkAutoUpgrade(userId) {
+        const monthlyCount = this.getMonthlyProblemCount(userId);
+        const monthlySpent = this.getCurrentMonthSpending(userId);
+        const user = await this.getUserById(userId);
+        
+        // If spending more than next tier, suggest upgrade
+        if (user.tier === 'STARTER' && monthlySpent > 99) {
+            return {
+                suggestUpgrade: true,
+                currentTier: 'STARTER',
+                suggestedTier: 'PRO',
+                monthlySavings: monthlySpent - 99,
+                message: `You'd save $${monthlySpent - 99}/month with PRO plan!`
+            };
+        }
+        
+        if (user.tier === 'PRO' && monthlySpent > 499) {
+            return {
+                suggestUpgrade: true,
+                currentTier: 'PRO',
+                suggestedTier: 'BUSINESS',
+                monthlySavings: monthlySpent - 499,
+                message: `Upgrade to BUSINESS and save $${monthlySpent - 499}/month!`
+            };
+        }
+        
+        return { suggestUpgrade: false };
+    }
+    
+    // ==========================================
+    // 9. REFUND SYSTEM
+    // ==========================================
+    async processRefund(transactionId, reason) {
+        const transaction = this.transactions.find(t => t.id === transactionId);
+        
+        if (!transaction) return { error: 'Transaction not found' };
+        if (transaction.refunded) return { error: 'Already refunded' };
+        
+        // 24-hour refund window
+        const hoursSinceTransaction = (Date.now() - transaction.timestamp.getTime()) / 3600000;
+        if (hoursSinceTransaction > 24) {
+            return { error: 'Refund window expired (24 hours)' };
+        }
+        
+        try {
+            // Process Stripe refund
+            const refund = await stripe.refunds.create({
+                payment_intent: transaction.stripePaymentIntentId,
+                amount: Math.round(transaction.amount * 100),
+                reason: 'requested_by_customer',
+                metadata: { reason }
+            });
+            
+            transaction.refunded = true;
+            transaction.refundId = refund.id;
+            transaction.refundReason = reason;
+            transaction.refundedAt = new Date();
+            
+            return {
+                success: true,
+                refund: {
+                    id: refund.id,
+                    amount: transaction.amount,
+                    status: refund.status,
+                    reason
+                }
+            };
+            
+        } catch (error) {
+            return { error: error.message };
+        }
+    }
+    
+    // ==========================================
+    // 10. RECEIPT GENERATION
+    // ==========================================
+    async generateReceipt(transactionId) {
+        const transaction = this.transactions.find(t => t.id === transactionId);
+        if (!transaction) return { error: 'Transaction not found' };
+        
+        const user = await this.getUserById(transaction.userId);
+        
+        return {
+            receiptId: 'RCP-' + transaction.id,
+            date: transaction.timestamp,
+            company: user.company,
+            email: user.email,
+            items: [{
+                description: `Problem Fix - ${transaction.breakdown?.severity || 'MEDIUM'}`,
+                amount: transaction.amount
+            }],
+            total: transaction.amount,
+            paymentMethod: '•••• ' + (transaction.paymentMethodLast4 || '4242'),
+            transactionId: transaction.id,
+            invoiceId: transaction.invoiceId
+        };
+    }
+    
+    // ==========================================
+    // HELPER METHODS
+    // ==========================================
+    async getOrCreateCustomer(userId) {
+        const user = await this.getUserById(userId);
+        
+        if (user.stripeCustomerId) {
+            return { id: user.stripeCustomerId };
+        }
+        
+        const customer = await stripe.customers.create({
+            email: user.email,
+            name: user.name,
+            metadata: { userId }
+        });
+        
+        user.stripeCustomerId = customer.id;
+        await this.updateUser(user);
+        
+        return customer;
+    }
+    
+    async getUserById(userId) {
+        // Mock user for demo
+        return {
+            id: userId,
+            name: 'Ali Khan',
+            email: 'ali@techstartup.com',
+            company: 'TechStartup Inc',
+            tier: 'STARTER',
+            freeCredits: 1,
+            stripeCustomerId: null
+        };
+    }
+    
+    async updateUser(user) {
+        // Update user in database
+        console.log('User updated:', user.id);
+    }
+}
+
+// ============================================
+// PAYMENT API ROUTES
+// ============================================
+function setupPaymentRoutes(app, paymentSystem) {
+    
+    // Get plans
+    app.get('/api/payment/plans', (req, res) => {
+        res.json(paymentSystem.plans);
+    });
+    
+    // Create subscription
+    app.post('/api/payment/subscribe', async (req, res) => {
+        const { planName, paymentMethodId } = req.body;
+        const userId = req.user?.id || 'demo-user';
+        
+        const result = await paymentSystem.createSubscription(userId, planName, paymentMethodId);
+        res.json(result);
+    });
+    
+    // Pay per problem
+    app.post('/api/payment/charge', async (req, res) => {
+        const { problemId, problemType, severity } = req.body;
+        const userId = req.user?.id || 'demo-user';
+        
+        const result = await paymentSystem.chargePerProblem(userId, {
+            id: problemId,
+            type: problemType,
+            severity: severity
+        });
+        
+        res.json(result);
+    });
+    
+    // Get billing history
+    app.get('/api/payment/billing', async (req, res) => {
+        const userId = req.user?.id || 'demo-user';
+        const history = await paymentSystem.getBillingHistory(userId);
+        res.json(history);
+    });
+    
+    // Get invoices
+    app.get('/api/payment/invoices', async (req, res) => {
+        const userId = req.user?.id || 'demo-user';
+        const invoices = paymentSystem.invoices.filter(i => i.userId === userId);
+        res.json(invoices);
+    });
+    
+    // Get invoice PDF
+    app.get('/api/invoices/:id/pdf', async (req, res) => {
+        const invoice = paymentSystem.invoices.find(i => i.id === req.params.id);
+        if (!invoice) return res.status(404).json({ error: 'Invoice not found' });
+        
+        // Generate PDF
+        res.json({ invoice, pdfUrl: `https://cdn.example.com/invoices/${invoice.id}.pdf` });
+    });
+    
+    // Add payment method
+    app.post('/api/payment/methods', async (req, res) => {
+        const userId = req.user?.id || 'demo-user';
+        const result = await paymentSystem.addPaymentMethod(userId, req.body);
+        res.json(result);
+    });
+    
+    // Get payment methods
+    app.get('/api/payment/methods', async (req, res) => {
+        const userId = req.user?.id || 'demo-user';
+        const methods = await paymentSystem.getPaymentMethods(userId);
+        res.json(methods);
+    });
+    
+    // Process refund
+    app.post('/api/payment/refund', async (req, res) => {
+        const { transactionId, reason } = req.body;
+        const result = await paymentSystem.processRefund(transactionId, reason);
+        res.json(result);
+    });
+    
+    // Get receipt
+    app.get('/api/payment/receipt/:transactionId', async (req, res) => {
+        const receipt = await paymentSystem.generateReceipt(req.params.transactionId);
+        res.json(receipt);
+    });
+    
+    // Webhook for Stripe events
+    app.post('/api/payment/webhook', express.raw({ type: 'application/json' }), async (req, res) => {
+        const sig = req.headers['stripe-signature'];
+        
+        try {
+            const event = stripe.webhooks.constructEvent(
+                req.body, sig, process.env.STRIPE_WEBHOOK_SECRET
+            );
+            
+            switch (event.type) {
+                case 'payment_intent.succeeded':
+                    console.log('✅ Payment succeeded:', event.data.object.id);
+                    break;
+                case 'payment_intent.payment_failed':
+                    console.log('❌ Payment failed:', event.data.object.id);
+                    break;
+                case 'invoice.payment_succeeded':
+                    console.log('📄 Invoice paid:', event.data.object.id);
+                    break;
+            }
+            
+            res.json({ received: true });
+        } catch (err) {
+            res.status(400).send(`Webhook Error: ${err.message}`);
+        }
+    });
+    
+    console.log('💰 Payment routes ready!');
+}
+
+// ============================================
+// TEST
+// ============================================
+async function testPaymentSystem() {
+    const payment = new FullPaymentSystem();
+    
+    console.log('💳 Testing Payment System...\n');
+    
+    // Test 1: Free credit
+    console.log('1️⃣ Free Credit Test:');
+    const freeResult = await payment.chargePerProblem('user1', {
+        id: 'PRB-001',
+        type: 'diagnosis',
+        severity: 'MEDIUM'
+    });
+    console.log('   Result:', freeResult.message);
+    
+    // Test 2: Paid charge
+    console.log('\n2️⃣ Paid Charge Test:');
+    const paidResult = await payment.chargePerProblem('user1', {
+        id: 'PRB-002',
+        type: 'fix',
+        severity: 'HIGH'
+    });
+    console.log('   Amount:', paidResult.amount);
+    console.log('   Breakdown:', paidResult.breakdown);
+    
+    // Test 3: Billing history
+    console.log('\n3️⃣ Billing History:');
+    const history = await payment.getBillingHistory('user1');
+    console.log('   Total Spent:', history.totalSpent);
+    console.log('   Monthly:', history.currentMonth);
+}
+
+// testPaymentSystem();
+
+module.exports = { FullPaymentSystem, setupPaymentRoutes };
 
