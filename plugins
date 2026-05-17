@@ -1,1 +1,57 @@
+// ============================================
+// plugins/index.js
+// PLUGIN SYSTEM - Central Registry
+// ============================================
+
+const languageLoader = require('./language-loader');
+const detectorLoader = require('./detector-loader');
+
+class PluginSystem {
+    
+    constructor() {
+        this.plugins = new Map();
+        this.loaded = 0;
+        this.failed = 0;
+    }
+    
+    async initialize() {
+        console.log('\n🧩 Initializing Plugin System...\n');
+        
+        // Load language plugins
+        const languages = await languageLoader.loadAll();
+        console.log(`   📚 ${languages.length} Languages loaded`);
+        
+        // Load detector plugins
+        const detectors = await detectorLoader.loadAll();
+        console.log(`   🔍 ${detectors.length} Detectors loaded`);
+        
+        this.loaded = languages.length + detectors.length;
+        
+        console.log(`\n✅ Plugin System Ready: ${this.loaded} plugins loaded\n`);
+        return { languages: languages.length, detectors: detectors.length };
+    }
+    
+    register(name, plugin) {
+        this.plugins.set(name, plugin);
+        console.log(`   📌 Plugin registered: ${name}`);
+    }
+    
+    get(name) {
+        return this.plugins.get(name);
+    }
+    
+    list() {
+        return Array.from(this.plugins.keys());
+    }
+    
+    getStats() {
+        return {
+            total: this.plugins.size,
+            loaded: this.loaded,
+            failed: this.failed
+        };
+    }
+}
+
+module.exports = new PluginSystem();
 
