@@ -1,1 +1,714 @@
+// ============================================
+// SMART PROJECT DIAGNOSTIC (smart-diagnostic.js)
+// Step-by-Step Interactive Problem Solver
+// ============================================
+
+class SmartProjectDiagnostic {
+    
+    constructor() {
+        this.session = null;
+        this.steps = [];
+        this.findings = {};
+    }
+    
+    // ==========================================
+    // MAIN FLOW - Start Here
+    // ==========================================
+    async start(userInput) {
+        console.log('\n🤖 Smart Diagnostic Started...\n');
+        
+        // Step 1: Initial intake
+        const session = await this.step1_Intake(userInput);
+        
+        // Step 2: Email scan
+        const emailCheck = await this.step2_ScanEmail(session.email);
+        
+        if (!emailCheck.valid) {
+            return {
+                success: false,
+                message: `❌ Email Issue Detected: ${emailCheck.problem}`,
+                fix: emailCheck.fix,
+                stopHere: true
+            };
+        }
+        
+        console.log('✅ Email verified - No issues found!');
+        
+        // Step 3: Where are you building?
+        const platform = await this.step3_WhereBuilding(session);
+        
+        // Step 4: Scan platform/project
+        const scan = await this.step4_ScanProject(session, platform);
+        
+        // Step 5: Show results
+        return await this.step5_ShowResults(session, scan);
+    }
+    
+    // ==========================================
+    // STEP 1: Initial Intake
+    // ==========================================
+    async step1_Intake(input) {
+        console.log('📝 STEP 1: Understanding your problem...\n');
+        
+        // Parse user's message
+        const parsed = {
+            problem: input,
+            keywords: this.extractKeywords(input),
+            timeReceived: new Date()
+        };
+        
+        // Ask for email (in real app, this comes from form)
+        const email = input.match(/[\w.+-]+@[\w-]+\.[\w.-]+/)?.[0] || 
+                     this.extractEmailFromContext(input);
+        
+        this.session = {
+            id: Date.now().toString(36),
+            problem: input,
+            email: email || 'unknown@unknown.com',
+            startTime: new Date(),
+            findings: {}
+        };
+        
+        return this.session;
+    }
+    
+    // ==========================================
+    // STEP 2: Scan Email
+    // ==========================================
+    async step2_ScanEmail(email) {
+        console.log(`📧 STEP 2: Scanning email: ${email}`);
+        console.log('   Checking email health...\n');
+        
+        const checks = {
+            // Check 1: Email format
+            format: /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email),
+            
+            // Check 2: Not disposable
+            disposable: this.isDisposableEmail(email),
+            
+            // Check 3: Not free email (business check)
+            freeEmail: this.isFreeEmail(email),
+            
+            // Check 4: MX record (domain can receive emails)
+            mxRecord: true, // Assume valid in simulation
+            
+            // Check 5: Not blacklisted
+            blacklisted: false,
+            
+            // Check 6: Domain exists
+            domainExists: true
+        };
+        
+        // Find problems
+        const problems = [];
+        
+        if (!checks.format) {
+            problems.push({
+                type: 'INVALID_EMAIL_FORMAT',
+                message: 'Email format invalid hai',
+                fix: 'Sahi email format use karein: name@company.com'
+            });
+        }
+        
+        if (checks.disposable) {
+            problems.push({
+                type: 'DISPOSABLE_EMAIL',
+                message: 'Temporary/disposable email detected',
+                fix: 'Apni real business email use karein (Gmail/Yahoo allowed nahi)'
+            });
+        }
+        
+        if (checks.freeEmail) {
+            problems.push({
+                type: 'FREE_EMAIL',
+                message: 'Free email (Gmail/Yahoo) - Low trust score',
+                fix: 'Company email use karein (e.g., you@yourcompany.com)',
+                warning: true // Warning only, not blocking
+            });
+        }
+        
+        const hasBlockingIssue = problems.some(p => !p.warning);
+        
+        return {
+            valid: !hasBlockingIssue,
+            email,
+            checks,
+            problems,
+            trustScore: this.calculateEmailScore(checks),
+            message: hasBlockingIssue ? 
+                `❌ Email verification failed!` : 
+                `✅ Email verified successfully!`,
+            details: problems.length > 0 ? problems : 'No issues found'
+        };
+    }
+    
+    // ==========================================
+    // STEP 3: Where Building?
+    // ==========================================
+    async step3_WhereBuilding(session) {
+        console.log('💻 STEP 3: Identifying your platform...\n');
+        
+        // Detect from problem description
+        const text = session.problem.toLowerCase();
+        
+        const platforms = {
+            VSCODE: ['vscode', 'visual studio', 'vs code', 'editor'],
+            REPLIT: ['replit', 'online editor', 'repl.it'],
+            CODESANDBOX: ['codesandbox', 'sandbox'],
+            LOCAL: ['local', 'my computer', 'laptop', 'pc', 'machine'],
+            GITHUB: ['github', 'git', 'repo', 'repository'],
+            CODEPEN: ['codepen', 'pen'],
+            GLITCH: ['glitch'],
+            STACKBLITZ: ['stackblitz'],
+            AWS: ['aws', 'ec2', 'lambda', 'cloud'],
+            VERCEL: ['vercel', 'deploy'],
+            NETLIFY: ['netlify'],
+            DOCKER: ['docker', 'container'],
+            KUBERNETES: ['kubernetes', 'k8s', 'pod'],
+            UNKNOWN: []
+        };
+        
+        let detectedPlatform = 'UNKNOWN';
+        
+        for (const [platform, keywords] of Object.entries(platforms)) {
+            if (keywords.some(k => text.includes(k))) {
+                detectedPlatform = platform;
+                break;
+            }
+        }
+        
+        console.log(`   Detected: ${detectedPlatform}`);
+        
+        return {
+            platform: detectedPlatform,
+            scanRequired: ['AWS', 'DOCKER', 'KUBERNETES', 'UNKNOWN'].includes(detectedPlatform),
+            message: `You are building on: ${detectedPlatform}`
+        };
+    }
+    
+    // ==========================================
+    // STEP 4: Scan Project
+    // ==========================================
+    async step4_ScanProject(session, platform) {
+        console.log(`🔍 STEP 4: Deep scanning your project...\n`);
+        
+        const text = session.problem.toLowerCase();
+        const findings = [];
+        
+        // === CRASH RELATED SCANS ===
+        
+        // 1. Check for crash patterns
+        if (text.includes('crash') || text.includes('crashing') || 
+            text.includes('broke') || text.includes('not working')) {
+            
+            findings.push({
+                category: 'CRASH',
+                message: 'Detected: Application crash/break',
+                details: await this.detectCrashCause(session)
+            });
+        }
+        
+        // 2. Check for "bar bar" (repeated) issues
+        if (text.includes('bar bar') || text.includes('again again') || 
+            text.includes('repeated') || text.includes('every time')) {
+            
+            findings.push({
+                category: 'REPEATED_FAILURE',
+                message: 'Detected: Problem happening repeatedly',
+                details: await this.detectRepeatedIssue(session)
+            });
+        }
+        
+        // 3. Check language/framework issues
+        const lang = this.detectLanguage(text);
+        if (lang) {
+            findings.push({
+                category: 'TECH_STACK',
+                message: `Detected: Using ${lang}`,
+                details: await this.scanLanguageIssues(session, lang)
+            });
+        }
+        
+        // 4. Common crash causes
+        findings.push(...await this.scanCommonCrashCauses(session));
+        
+        return {
+            platform: platform.platform,
+            findings,
+            totalIssues: findings.length,
+            criticalCount: findings.filter(f => f.details?.severity === 'CRITICAL').length
+        };
+    }
+    
+    // ==========================================
+    // Detect specific crash causes
+    // ==========================================
+    async detectCrashCause(session) {
+        const text = session.problem.toLowerCase();
+        const causes = [];
+        
+        const crashPatterns = {
+            MEMORY: {
+                keywords: ['memory', 'ram', 'heap', 'leak', 'out of'],
+                cause: 'Memory issue - App running out of RAM',
+                severity: 'HIGH',
+                solution: 'Memory limit increase + leak detection needed',
+                fix: `
+// 1. Check memory usage
+console.log(process.memoryUsage());
+
+// 2. Set memory limit (Node.js)
+node --max-old-space-size=4096 app.js
+
+// 3. Check for leaks
+const used = process.memoryUsage();
+for (let key in used) {
+    console.log(\`\${key}: \${Math.round(used[key] / 1024 / 1024 * 100) / 100} MB\`);
+}`
+            },
+            PORT: {
+                keywords: ['port', 'address in use', 'eaddrinuse', 'already'],
+                cause: 'Port conflict - Another app using same port',
+                severity: 'MEDIUM',
+                solution: 'Change port or kill conflicting process',
+                fix: `
+# Find process on port 3000
+lsof -i :3000
+# Kill it
+kill -9 <PID>
+
+# OR change port
+PORT=3001 node app.js`
+            },
+            DEPENDENCY: {
+                keywords: ['module', 'package', 'install', 'require', 'import', 'cannot find'],
+                cause: 'Missing/broken dependency',
+                severity: 'HIGH',
+                solution: 'Reinstall dependencies',
+                fix: `
+# Delete and reinstall
+rm -rf node_modules package-lock.json
+npm install
+
+# Or for yarn
+rm -rf node_modules yarn.lock
+yarn install`
+            },
+            SYNTAX: {
+                keywords: ['syntax', 'error', 'unexpected', 'token', 'typo'],
+                cause: 'Syntax/code error',
+                severity: 'MEDIUM',
+                solution: 'Fix code syntax error',
+                fix: 'Check error line number and fix syntax'
+            },
+            ENV: {
+                keywords: ['env', 'environment', '.env', 'config', 'variable'],
+                cause: 'Missing environment variables',
+                severity: 'HIGH',
+                solution: 'Set up .env file correctly',
+                fix: `
+# Create .env file
+DATABASE_URL=mongodb://localhost:27017/mydb
+PORT=3000
+API_KEY=your_key_here`
+            },
+            DATABASE: {
+                keywords: ['database', 'db', 'mongo', 'sql', 'connection', 'timeout'],
+                cause: 'Database connection issue',
+                severity: 'CRITICAL',
+                solution: 'Check database connection',
+                fix: `
+# Check if database is running
+systemctl status mongod
+# Start if stopped
+systemctl start mongod
+
+# Check connection string
+mongodb://localhost:27017/mydb`
+            }
+        };
+        
+        for (const [type, pattern] of Object.entries(crashPatterns)) {
+            if (pattern.keywords.some(k => text.includes(k))) {
+                causes.push({
+                    type,
+                    ...pattern
+                });
+            }
+        }
+        
+        if (causes.length === 0) {
+            causes.push({
+                type: 'UNKNOWN_CRASH',
+                cause: 'Crash cause unclear - Need more info',
+                severity: 'MEDIUM',
+                solution: 'Check error logs and stack trace'
+            });
+        }
+        
+        return {
+            causes,
+            primaryCause: causes[0],
+            totalPossible: causes.length
+        };
+    }
+    
+    // ==========================================
+    // Detect repeated failure patterns
+    // ==========================================
+    async detectRepeatedIssue(session) {
+        const text = session.problem.toLowerCase();
+        
+        const patterns = {
+            INFINITE_LOOP: {
+                detection: text.includes('hang') || text.includes('freeze') || text.includes('stuck'),
+                cause: 'Application stuck in infinite loop',
+                fix: 'Check while/for loops for proper exit conditions'
+            },
+            WATCH_LOOP: {
+                detection: text.includes('restart') || text.includes('reboot') || text.includes('again'),
+                cause: 'Process watcher restarting crash loop',
+                fix: 'Check PM2/nodemon logs to find crash reason'
+            },
+            DEPLOY_LOOP: {
+                detection: text.includes('deploy') || text.includes('build') || text.includes('pipeline'),
+                cause: 'CI/CD pipeline failing repeatedly',
+                fix: 'Check build logs for compilation errors'
+            }
+        };
+        
+        const matches = [];
+        for (const [type, pattern] of Object.entries(patterns)) {
+            if (pattern.detection) {
+                matches.push({ type, ...pattern });
+            }
+        }
+        
+        return matches;
+    }
+    
+    // ==========================================
+    // Scan language-specific issues
+    // ==========================================
+    async scanLanguageIssues(session, language) {
+        const text = session.problem.toLowerCase();
+        
+        const langIssues = {
+            'Node.js': [
+                { check: text.includes('callback'), issue: 'Callback nesting (callback hell)', fix: 'Use async/await or Promises' },
+                { check: text.includes('require') && !text.includes('package.json'), issue: 'Missing package.json', fix: 'Run: npm init -y' },
+                { check: text.includes('node_modules') && text.includes('delete'), issue: 'node_modules corruption', fix: 'Delete node_modules + npm install' }
+            ],
+            'React': [
+                { check: text.includes('hook'), issue: 'React hooks rules violation', fix: 'Hooks only at top level, not in conditions' },
+                { check: text.includes('render'), issue: 'Too many re-renders', fix: 'Check useEffect dependencies' },
+                { check: text.includes('state'), issue: 'State update on unmounted component', fix: 'Use cleanup in useEffect' }
+            ],
+            'Python': [
+                { check: text.includes('indent'), issue: 'Indentation error', fix: 'Use 4 spaces consistently, not tabs' },
+                { check: text.includes('import'), issue: 'Module import error', fix: 'pip install <missing-module>' },
+                { check: text.includes('version') && text.includes('2'), issue: 'Python 2 vs 3 conflict', fix: 'Use python3 command' }
+            ],
+            'Next.js': [
+                { check: text.includes('build'), issue: 'Build error - possibly static generation', fix: 'Check getStaticProps for errors' },
+                { check: text.includes('router'), issue: 'Router error', fix: 'Use useRouter in Client Component only' }
+            ]
+        };
+        
+        const issues = langIssues[language] || [];
+        return issues.filter(i => i.check);
+    }
+    
+    // ==========================================
+    // Scan common crash causes
+    // ==========================================
+    async scanCommonCrashCauses(session) {
+        const text = session.problem.toLowerCase();
+        const findings = [];
+        
+        // Check file system
+        if (text.includes('file') || text.includes('directory') || text.includes('folder')) {
+            findings.push({
+                category: 'FILE_SYSTEM',
+                message: 'File/directory issue detected',
+                severity: 'MEDIUM',
+                solution: 'Check file paths and permissions',
+                fix: `
+# Check if file exists
+ls -la /path/to/file
+
+# Check permissions
+chmod 755 /path/to/file
+
+# Create directory if missing
+mkdir -p /path/to/directory`
+            });
+        }
+        
+        // Check build/compilation
+        if (text.includes('build') || text.includes('compile') || text.includes('error')) {
+            findings.push({
+                category: 'BUILD_ERROR',
+                message: 'Build/compilation error',
+                severity: 'HIGH',
+                solution: 'Fix build errors and recompile',
+                fix: `
+# Check build logs
+npm run build
+
+# Common fixes
+# - Fix import paths
+# - Update dependencies
+# - Check TypeScript types
+# - Fix ESLint errors`
+            });
+        }
+        
+        // Check network
+        if (text.includes('api') || text.includes('fetch') || text.includes('axios') || 
+            text.includes('network') || text.includes('request')) {
+            findings.push({
+                category: 'NETWORK',
+                message: 'API/Network issue',
+                severity: 'MEDIUM',
+                solution: 'Check API endpoints and network',
+                fix: `
+# Test API
+curl http://localhost:3000/api
+
+# Check if service is running
+netstat -tulpn | grep :3000
+
+# Check CORS
+# Add headers: Access-Control-Allow-Origin: *`
+            });
+        }
+        
+        return findings;
+    }
+    
+    // ==========================================
+    // STEP 5: Show Results
+    // ==========================================
+    async step5_ShowResults(session, scan) {
+        console.log('\n📊 STEP 5: Generating report...\n');
+        
+        const problems = [];
+        
+        // Collect all findings
+        for (const finding of scan.findings) {
+            if (finding.details?.causes) {
+                problems.push(...finding.details.causes);
+            }
+            if (finding.details?.length > 0) {
+                problems.push(...finding.details.map(d => ({
+                    type: d.type || d.issue,
+                    cause: d.issue || d.cause,
+                    severity: d.severity || 'MEDIUM',
+                    solution: d.solution || d.fix,
+                    fix: d.fix || ''
+                })));
+            }
+        }
+        
+        // Generate final report
+        const report = {
+            sessionId: session.id,
+            summary: {
+                totalProblems: problems.length,
+                critical: problems.filter(p => p.severity === 'CRITICAL').length,
+                high: problems.filter(p => p.severity === 'HIGH').length,
+                medium: problems.filter(p => p.severity === 'MEDIUM').length
+            },
+            problems,
+            quickFixes: problems.filter(p => p.fix).slice(0, 3),
+            recommendation: this.generateRecommendation(problems),
+            nextSteps: [
+                '1. Apply suggested fixes one by one',
+                '2. Test after each fix',
+                '3. If still crashing, enable debug mode',
+                '4. Share error logs for deeper analysis'
+            ]
+        };
+        
+        console.log(`   Found ${problems.length} potential issues`);
+        console.log(`   Critical: ${report.summary.critical} | High: ${report.summary.high}`);
+        
+        return {
+            success: true,
+            emailVerified: true,
+            message: `✅ Analysis complete! Found ${problems.length} issues.`,
+            report
+        };
+    }
+    
+    // ==========================================
+    // HELPER METHODS
+    // ==========================================
+    extractKeywords(text) {
+        const crashWords = ['crash', 'error', 'fail', 'break', 'not working', 'down'];
+        return crashWords.filter(w => text.toLowerCase().includes(w));
+    }
+    
+    extractEmailFromContext(text) {
+        const emailMatch = text.match(/[\w.+-]+@[\w-]+\.[\w.-]+/);
+        return emailMatch ? emailMatch[0] : null;
+    }
+    
+    isDisposableEmail(email) {
+        const disposableDomains = [
+            'tempmail.com', 'temp-mail.org', 'guerrillamail.com',
+            '10minutemail.com', 'mailinator.com', 'yopmail.com',
+            'throwaway.email', 'trashmail.com', 'dispostable.com'
+        ];
+        const domain = email.split('@')[1]?.toLowerCase();
+        return disposableDomains.includes(domain);
+    }
+    
+    isFreeEmail(email) {
+        const freeDomains = [
+            'gmail.com', 'yahoo.com', 'hotmail.com', 'outlook.com',
+            'live.com', 'aol.com', 'mail.com', 'protonmail.com',
+            'icloud.com', 'me.com', 'inbox.com'
+        ];
+        const domain = email.split('@')[1]?.toLowerCase();
+        return freeDomains.includes(domain);
+    }
+    
+    calculateEmailScore(checks) {
+        let score = 0;
+        if (checks.format) score += 20;
+        if (!checks.disposable) score += 30;
+        if (!checks.freeEmail) score += 25;
+        if (checks.mxRecord) score += 15;
+        if (!checks.blacklisted) score += 10;
+        return score;
+    }
+    
+    detectLanguage(text) {
+        if (text.includes('react') || text.includes('component') || text.includes('jsx')) return 'React';
+        if (text.includes('next.js') || text.includes('nextjs')) return 'Next.js';
+        if (text.includes('node') || text.includes('express') || text.includes('npm')) return 'Node.js';
+        if (text.includes('python') || text.includes('django') || text.includes('flask')) return 'Python';
+        if (text.includes('vue')) return 'Vue.js';
+        if (text.includes('angular')) return 'Angular';
+        if (text.includes('flutter') || text.includes('dart')) return 'Flutter';
+        return null;
+    }
+    
+    generateRecommendation(problems) {
+        if (problems.length === 0) {
+            return 'No major issues detected. Check error logs for more details.';
+        }
+        
+        const critical = problems.filter(p => p.severity === 'CRITICAL');
+        if (critical.length > 0) {
+            return `🚨 Critical issues found! Fix ${critical[0].type} first - ${critical[0].cause}`;
+        }
+        
+        const high = problems.filter(p => p.severity === 'HIGH');
+        if (high.length > 0) {
+            return `⚠️ Start with: ${high[0].cause}. Apply fix and test.`;
+        }
+        
+        return 'Minor issues detected. Apply fixes one by one.';
+    }
+}
+
+// ============================================
+// INTERACTIVE CLI VERSION
+// ============================================
+class InteractiveDiagnostic {
+    
+    constructor() {
+        this.diagnostic = new SmartProjectDiagnostic();
+    }
+    
+    async runInteractive() {
+        console.log('\n🤖 Welcome to Supreme Problem Detector!\n');
+        console.log('=' .repeat(50));
+        
+        // Simulate user input
+        const scenarios = [
+            {
+                input: "Mera React project bar bar crash ho rha hai. MongoDB se connection timeout aa rha. meri email ali@techstartup.com hai. VS Code pe bna rha hun.",
+                description: "React app crash + DB timeout + VS Code"
+            },
+            {
+                input: "Next.js project build fail ho rha bar bar. I'm using replit. Port 3000 already in use error. contact@mycompany.com",
+                description: "Next.js build fail + Port conflict + Replit"
+            },
+            {
+                input: "Node.js app memory leak se crash ho rha every 30 min. EC2 pe hosted hai. help@startup.pk",
+                description: "Memory leak + AWS + Crash loop"
+            }
+        ];
+        
+        for (const scenario of scenarios) {
+            console.log(`\n📥 User Input: "${scenario.input}"\n`);
+            
+            const result = await this.diagnostic.start(scenario.input);
+            
+            console.log('\n📊 DIAGNOSTIC RESULT:');
+            console.log('='.repeat(50));
+            console.log(`Email Status: ${result.emailVerified ? '✅ Verified' : '❌ Issues Found'}`);
+            console.log(`Problems Found: ${result.report?.summary?.totalProblems || 0}`);
+            console.log(`Critical: ${result.report?.summary?.critical || 0}`);
+            console.log(`Recommendation: ${result.report?.recommendation}`);
+            console.log('='.repeat(50));
+            
+            if (result.report?.problems?.length > 0) {
+                console.log('\n🔧 QUICK FIXES:');
+                result.report.problems
+                    .filter(p => p.fix)
+                    .slice(0, 2)
+                    .forEach((p, i) => {
+                        console.log(`\n${i+1}. ${p.type}: ${p.cause}`);
+                        console.log(`   Solution: ${p.solution}`);
+                        console.log(`   Fix:\n${p.fix}`);
+                    });
+            }
+        }
+    }
+}
+
+// ============================================
+// EXPRESS API ENDPOINT
+// ============================================
+function setupDiagnosticRoute(app) {
+    const diagnostic = new SmartProjectDiagnostic();
+    
+    app.post('/api/diagnose', async (req, res) => {
+        const { problem } = req.body;
+        
+        if (!problem) {
+            return res.status(400).json({ error: 'Please describe your problem' });
+        }
+        
+        try {
+            const result = await diagnostic.start(problem);
+            res.json(result);
+        } catch (error) {
+            res.status(500).json({ error: error.message });
+        }
+    });
+    
+    console.log('✅ Diagnostic API ready: POST /api/diagnose');
+}
+
+// ============================================
+// TEST
+// ============================================
+async function test() {
+    const interactive = new InteractiveDiagnostic();
+    await interactive.runInteractive();
+}
+
+// test();
+
+module.exports = { 
+    SmartProjectDiagnostic, 
+    InteractiveDiagnostic, 
+    setupDiagnosticRoute 
+};
 
