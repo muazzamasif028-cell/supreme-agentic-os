@@ -1,1 +1,428 @@
+// ============================================
+// PRICING MODEL - 5 Tier System
+// ============================================
+
+class PricingEngine {
+    
+    static TIERS = {
+        STARTER: {
+            name: '🟢 STARTER',
+            useCase: ['cpu_high', 'disk_full', 'minor_bugs', 'config_error'],
+            trigger: 'Single service issue',
+            diagnosis: { min: 20, max: 80 },
+            fix: { min: 80, max: 180 },
+            fullSolution: { min: 180, max: 280 },
+            features: ['Basic detection', 'Email support', '24h response']
+        },
+        MEDIUM: {
+            name: '🟡 MEDIUM',
+            useCase: ['db_issues', 'latency', 'api_errors', 'memory_leak'],
+            trigger: 'Multiple services affected',
+            diagnosis: { min: 100, max: 400 },
+            fix: { min: 400, max: 1000 },
+            fullSolution: { min: 1000, max: 1800 },
+            features: ['Advanced detection', 'Root cause analysis', 'Chat support', '4h response']
+        },
+        BUSINESS: {
+            name: '🟠 BUSINESS',
+            useCase: ['system_slowdown', 'outages', 'deployment_fail'],
+            trigger: 'Production impact',
+            diagnosis: { min: 1500, max: 4000 },
+            fix: { min: 4000, max: 12000 },
+            fullSolution: { min: 12000, max: 25000 },
+            features: ['Full diagnostics', 'Auto-fix enabled', 'Priority support', '1h response', 'SLA 99.9%']
+        },
+        ENTERPRISE: {
+            name: '🔴 ENTERPRISE',
+            useCase: ['cloud_outage', 'security_breach', 'data_loss'],
+            trigger: 'Revenue impact',
+            diagnosis: { min: 8000, max: 30000 },
+            fix: { min: 30000, max: 120000 },
+            fullSolution: { min: 120000, max: 250000 },
+            features: ['Dedicated team', 'Instant response', 'SLA 99.99%', 'Legal support', 'Disaster recovery']
+        },
+        GLOBAL: {
+            name: '🏢 GLOBAL',
+            useCase: ['smart_city', 'infrastructure', 'neom_type'],
+            trigger: 'Critical infrastructure',
+            diagnosis: { min: 80000, max: 250000 },
+            fix: { min: 250000, max: 700000 },
+            fullSolution: { min: 700000, max: 1000000 },
+            features: ['On-site team', 'Custom solution', 'SLA 99.999%', 'Government grade', 'Full DR plan']
+        }
+    };
+    
+    // Auto-detect tier from problem
+    detectTier(problem) {
+        const severity = problem.severity || 'MEDIUM';
+        const category = problem.category || 'GENERAL';
+        const affectedServices = problem.affectedServices || 1;
+        
+        // GLOBAL level
+        if (problem.isInfrastructure || affectedServices > 100) {
+            return 'GLOBAL';
+        }
+        
+        // ENTERPRISE level
+        if (severity === 'CRITICAL' && (category === 'SECURITY' || problem.revenueImpact)) {
+            return 'ENTERPRISE';
+        }
+        
+        // BUSINESS level
+        if (severity === 'CRITICAL' || affectedServices > 10) {
+            return 'BUSINESS';
+        }
+        
+        // MEDIUM level
+        if (severity === 'HIGH' || affectedServices > 1) {
+            return 'MEDIUM';
+        }
+        
+        // STARTER level (default)
+        return 'STARTER';
+    }
+    
+    // Calculate price
+    calculatePrice(problem, tier = null) {
+        const selectedTier = tier || this.detectTier(problem);
+        const pricing = PricingEngine.TIERS[selectedTier];
+        
+        // Get urgency multiplier
+        const urgency = problem.urgency || 'normal';
+        const urgencyMultiplier = {
+            'low': 0.8,
+            'normal': 1.0,
+            'high': 1.5,
+            'critical': 2.0
+        };
+        
+        const multiplier = urgencyMultiplier[urgency];
+        
+        // Calculate
+        const diagnosis = Math.round(
+            (pricing.diagnosis.min + pricing.diagnosis.max) / 2 * multiplier
+        );
+        const fix = Math.round(
+            (pricing.fix.min + pricing.fix.max) / 2 * multiplier
+        );
+        const fullSolution = Math.round(
+            (pricing.fullSolution.min + pricing.fullSolution.max) / 2 * multiplier
+        );
+        
+        // Discount for first-time
+        const discount = problem.isFirstTime ? 0.3 : 0; // 30% off
+        const freeEligible = problem.isFirstTime && diagnosis < 100;
+        
+        return {
+            tier: selectedTier,
+            tierName: pricing.name,
+            trigger: pricing.trigger,
+            features: pricing.features,
+            pricing: {
+                diagnosis: freeEligible ? 0 : Math.round(diagnosis * (1 - discount)),
+                fix: freeEligible ? 0 : Math.round(fix * (1 - discount)),
+                fullSolution: freeEligible ? 0 : Math.round(fullSolution * (1 - discount)),
+                originalDiagnosis: diagnosis,
+                originalFix: fix,
+                originalFullSolution: fullSolution
+            },
+            discount: discount > 0 ? `${Math.round(discount * 100)}%` : 'None',
+            freeEligible,
+            savings: freeEligible ? diagnosis : Math.round(diagnosis * discount),
+            currency: 'USD'
+        };
+    }
+    
+    // Generate invoice
+    generateInvoice(problem, selectedService = 'diagnosis') {
+        const pricing = this.calculatePrice(problem);
+        const amount = pricing.pricing[selectedService];
+        
+        return {
+            invoiceId: 'INV-' + Date.now().toString(36).toUpperCase(),
+            company: problem.company,
+            tier: pricing.tierName,
+            service: selectedService,
+            amount,
+            status: amount === 0 ? 'FREE' : 'PENDING',
+            dueDate: new Date(Date.now() + 7 * 86400000).toISOString(),
+            paymentLink: amount > 0 ? `https://pay.supreme-detector.com/${Date.now()}` : null
+        };
+    }
+}
+
+// ============================================
+// LEARNING LOOP
+// ============================================
+
+class LearningLoop {
+    
+    constructor() {
+        this.knowledgeBase = new Map();
+        this.metrics = new Map();
+        this.feedbackLoop = [];
+    }
+    
+    // Learn from every execution
+    async learn(execution) {
+        console.log('\n🧠 Learning from execution...');
+        
+        // 1. Record what happened
+        const record = {
+            problem: execution.problem,
+            solution: execution.solution,
+            success: execution.success,
+            time: execution.executionTime,
+            confidence: execution.confidence,
+            timestamp: Date.now()
+        };
+        
+        // 2. Update knowledge base
+        this.updateKnowledge(record);
+        
+        // 3. Update success metrics
+        this.updateMetrics(record);
+        
+        // 4. Improve future predictions
+        await this.improveModel(record);
+        
+        return {
+            learned: true,
+            knowledgeSize: this.knowledgeBase.size,
+            averageConfidence: this.getAverageConfidence()
+        };
+    }
+    
+    updateKnowledge(record) {
+        const key = `${record.problem.category}_${record.problem.type}`;
+        
+        if (!this.knowledgeBase.has(key)) {
+            this.knowledgeBase.set(key, {
+                occurrences: 0,
+                solutions: new Map(),
+                avgFixTime: 0,
+                successRate: 0
+            });
+        }
+        
+        const entry = this.knowledgeBase.get(key);
+        entry.occurrences++;
+        
+        // Track solution effectiveness
+        const solutionKey = record.solution?.id || 'unknown';
+        const solCount = entry.solutions.get(solutionKey) || { uses: 0, successes: 0 };
+        solCount.uses++;
+        if (record.success) solCount.successes++;
+        entry.solutions.set(solutionKey, solCount);
+        
+        // Update averages
+        entry.avgFixTime = (entry.avgFixTime * (entry.occurrences - 1) + record.time) / entry.occurrences;
+        entry.successRate = Array.from(entry.solutions.values())
+            .reduce((sum, s) => sum + s.successes, 0) / entry.occurrences;
+        
+        this.knowledgeBase.set(key, entry);
+    }
+    
+    updateMetrics(record) {
+        // Track by severity
+        const sevKey = `severity_${record.problem.severity}`;
+        this.metrics.set(sevKey, (this.metrics.get(sevKey) || 0) + 1);
+        
+        // Track by category
+        const catKey = `category_${record.problem.category}`;
+        this.metrics.set(catKey, (this.metrics.get(catKey) || 0) + 1);
+        
+        // Track success rate
+        const successKey = record.success ? 'success' : 'failure';
+        this.metrics.set(successKey, (this.metrics.get(successKey) || 0) + 1);
+    }
+    
+    async improveModel(record) {
+        // Simulate model improvement
+        this.feedbackLoop.push({
+            before: this.getAverageConfidence(),
+            record,
+            improved: Math.min(this.getAverageConfidence() + 0.1, 99.9)
+        });
+    }
+    
+    // Predict best solution for new problem
+    predict(problem) {
+        const key = `${problem.category}_${problem.type}`;
+        const knowledge = this.knowledgeBase.get(key);
+        
+        if (!knowledge || knowledge.occurrences < 3) {
+            return {
+                confidence: 50,
+                message: 'Limited data - using default solution',
+                source: 'default'
+            };
+        }
+        
+        // Find best solution from history
+        let bestSolution = null;
+        let bestRate = 0;
+        
+        knowledge.solutions.forEach((stats, solId) => {
+            const rate = stats.successes / stats.uses;
+            if (rate > bestRate) {
+                bestRate = rate;
+                bestSolution = solId;
+            }
+        });
+        
+        return {
+            confidence: Math.round(knowledge.successRate * 100),
+            predictedSolution: bestSolution,
+            avgFixTime: Math.round(knowledge.avgFixTime),
+            occurrences: knowledge.occurrences,
+            source: 'learned'
+        };
+    }
+    
+    getAverageConfidence() {
+        let total = 0;
+        let count = 0;
+        
+        this.knowledgeBase.forEach(entry => {
+            total += entry.successRate;
+            count++;
+        });
+        
+        return count > 0 ? Math.round((total / count) * 100) : 50;
+    }
+    
+    // Export knowledge for training
+    exportKnowledge() {
+        const exportData = [];
+        
+        this.knowledgeBase.forEach((value, key) => {
+            exportData.push({
+                pattern: key,
+                occurrences: value.occurrences,
+                successRate: value.successRate,
+                avgFixTime: value.avgFixTime,
+                topSolution: Array.from(value.solutions.entries())
+                    .sort((a, b) => (b[1].successes / b[1].uses) - (a[1].successes / a[1].uses))[0]?.[0]
+            });
+        });
+        
+        return exportData.sort((a, b) => b.occurrences - a.occurrences);
+    }
+    
+    getStats() {
+        return {
+            totalLearned: this.feedbackLoop.length,
+            knowledgeSize: this.knowledgeBase.size,
+            averageConfidence: this.getAverageConfidence(),
+            totalSuccesses: this.metrics.get('success') || 0,
+            totalFailures: this.metrics.get('failure') || 0,
+            successRate: Math.round(
+                ((this.metrics.get('success') || 0) / 
+                ((this.metrics.get('success') || 0) + (this.metrics.get('failure') || 1)) * 100)
+            )
+        };
+    }
+}
+
+// ============================================
+// INTEGRATED SYSTEM
+// ============================================
+class SupremeSystem {
+    
+    constructor() {
+        this.pricing = new PricingEngine();
+        this.learning = new LearningLoop();
+        this.executions = [];
+    }
+    
+    async processProblem(problem) {
+        console.log('\n🚀 Processing problem...');
+        
+        // 1. Predict from learning
+        const prediction = this.learning.predict(problem);
+        console.log(`   Prediction: ${prediction.confidence}% confidence`);
+        
+        // 2. Calculate price
+        const price = this.pricing.calculatePrice(problem);
+        console.log(`   Tier: ${price.tierName} | Price: $${price.pricing.diagnosis}`);
+        
+        // 3. Generate invoice if needed
+        const invoice = price.freeEligible ? null : 
+            this.pricing.generateInvoice(problem, 'diagnosis');
+        
+        return {
+            prediction,
+            price,
+            invoice,
+            freeEligible: price.freeEligible,
+            summary: price.freeEligible ? 
+                '🎁 FREE - First problem complimentary!' :
+                `💰 Tier: ${price.tierName} - $${price.pricing.diagnosis}`
+        };
+    }
+    
+    // After solving, learn from it
+    async completeExecution(problem, result) {
+        await this.learning.learn({
+            problem: problem,
+            solution: result.solution,
+            success: result.success,
+            executionTime: result.executionTime,
+            confidence: result.confidence?.overall || 0
+        });
+        
+        console.log('\n📊 System Stats:', this.learning.getStats());
+    }
+}
+
+// ============================================
+// TEST
+// ============================================
+async function test() {
+    const system = new SupremeSystem();
+    
+    // Test problems at different levels
+    const problems = [
+        { 
+            category: 'CPU', type: 'HIGH_CPU', severity: 'LOW', 
+            affectedServices: 1, company: 'Startup Inc', isFirstTime: true,
+            description: 'CPU at 85% on one server'
+        },
+        { 
+            category: 'DATABASE', type: 'TIMEOUT', severity: 'HIGH', 
+            affectedServices: 5, company: 'MidCorp', isFirstTime: false,
+            description: 'Database timeout affecting multiple services'
+        },
+        { 
+            category: 'SECURITY', type: 'BREACH', severity: 'CRITICAL', 
+            affectedServices: 50, company: 'BigBank', isFirstTime: false, 
+            revenueImpact: true, urgency: 'critical',
+            description: 'Security breach in production'
+        }
+    ];
+    
+    for (const problem of problems) {
+        console.log('\n' + '='.repeat(50));
+        console.log(`📋 Problem: ${problem.description}`);
+        const result = await system.processProblem(problem);
+        console.log(result.summary);
+        
+        // Simulate execution and learning
+        await system.completeExecution(problem, {
+            solution: { id: 'FIX-001' },
+            success: true,
+            executionTime: 150,
+            confidence: { overall: result.prediction.confidence }
+        });
+    }
+    
+    console.log('\n' + '='.repeat(50));
+    console.log('📊 FINAL KNOWLEDGE BASE:');
+    console.log(JSON.stringify(system.learning.getStats(), null, 2));
+}
+
+// test();
+
+module.exports = { PricingEngine, LearningLoop, SupremeSystem };
 
