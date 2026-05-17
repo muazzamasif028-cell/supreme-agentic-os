@@ -1,1 +1,992 @@
+// ============================================
+// RESOURCE DETECTOR - Complete (10/10)
+// Adding: Disk IOPS, File Descriptor, Process, Thread, Inode, Quota
+// ============================================
+
+class ResourceDetectorComplete {
+    
+    constructor() {
+        this.thresholds = {
+            // Existing
+            cpuThrottle: 90,          // CPU throttling at 90%
+            memoryLimit: 90,          // Memory limit at 90%
+            networkPacketLoss: 5,     // 5%+ packet loss = HIGH
+            connectionLimit: 90,      // Connection limit at 90%
+            
+            // NEW
+            diskIOPS: 80,             // 80% of provisioned IOPS
+            diskIOPSCritical: 95,     // 95%+ = CRITICAL
+            fileDescriptor: 80,       // 80% of ulimit
+            fdCritical: 95,           // 95%+ = CRITICAL
+            processLimit: 80,         // 80% of max processes
+            threadLimit: 80,          // 80% of max threads
+            inodeUsage: 80,           // 80% inode usage
+            inodeCritical: 95,        // 95%+ = CRITICAL
+            quotaUsage: 80,           // 80% quota
+            quotaCritical: 95         // 95%+ = CRITICAL
+        };
+    }
+    
+    // ==========================================
+    // 1. DISK IOPS LIMIT DETECTOR
+    // ==========================================
+    async detectDiskIOPSLimit(metrics = {}) {
+        const problems = [];
+        
+        const provisionedIOPS = metrics.provisionedIOPS || 3000;  // e.g., AWS gp3 = 3000
+        const currentIOPS = metrics.currentIOPS || 0;
+        const burstBalance = metrics.burstBalance || 100;         // AWS burst balance %
+        const readIOPS = metrics.readIOPS || 0;
+        const writeIOPS = metrics.writeIOPS || 0;
+        const diskQueue = metrics.diskQueue || 0;
+        const diskType = metrics.diskType || 'gp3';
+        
+        const iopsPercent = (currentIOPS / provisionedIOPS) * 100;
+        
+        // CRITICAL: IOPS completely exhausted
+        if (iopsPercent >= this.thresholds.diskIOPSCritical) {
+            problems.push({
+                type: 'IOPS_EXHAUSTED',
+                severity: 'CRITICAL',
+                message: `Disk IOPS exhausted: ${currentIOPS}/${provisionedIOPS} (${iopsPercent.toFixed(0)}%)`,
+                metrics: { currentIOPS, provisionedIOPS, burstBalance, diskQueue },
+                impact: {
+                    performance: 'Severe disk slowdown',
+                    applications: 'Database/App I/O blocked',
+                    latency: 'I/O wait spike expected'
+                }
+            });
+        }
+        // HIGH: IOPS near limit
+        else if (iopsPercent >= this.thresholds.diskIOPS) {
+            problems.push({
+                type: 'IOPS_NEAR_LIMIT',
+                severity: 'HIGH',
+                message: `Disk IOPS approaching limit: ${currentIOPS}/${provisionedIOPS} (${iopsPercent.toFixed(0)}%)`
+            });
+        }
+        
+        // Burst balance running out (AWS specific)
+        if (burstBalance < 20) {
+            problems.push({
+                type: 'BURST_BALANCE_LOW',
+                severity: 'HIGH',
+                message: `Burst balance at ${burstBalance}% - IOPS will throttle soon`
+            });
+        }
+        
+        // Disk queue building up
+        if (diskQueue > 100) {
+            problems.push({
+                type: 'DISK_QUEUE_BUILDUP',
+                severity: 'HIGH',
+                message: `Disk queue depth: ${diskQueue} - I/O operations waiting`
+            });
+        }
+        
+        // Read/Write imbalance
+        if (writeIOPS > readIOPS * 3 && currentIOPS > provisionedIOPS * 0.7) {
+            problems.push({
+                type: 'WRITE_HEAVY_WORKLOAD',
+                severity: 'MEDIUM',
+                message: `Write-heavy workload: ${writeIOPS} write vs ${readIOPS} read IOPS`
+            });
+        }
+        
+        return {
+            problems,
+            rootCause: this.analyzeIOPSRootCause(metrics),
+            solutions: this.getIOPSSolutions(metrics),
+            autoFix: this.getIOPSAutoFix()
+        };
+    }
+    
+    analyzeIOPSRootCause(metrics) {
+        if (metrics.currentIOPS > metrics.provisionedIOPS * 0.9) {
+            return {
+                cause: 'WORKLOAD_EXCEEDS_PROVISIONED_IOPS',
+                chain: [
+                    'Application demands more IOPS than provisioned',
+                    'Disk cannot keep up with requests',
+                    'I/O queue builds up',
+                    'Operations slow down',
+                    'Application performance degrades'
+                ],
+                confidence: 92
+            };
+        }
+        
+        if (metrics.writeIOPS > metrics.readIOPS * 2) {
+            return {
+                cause: 'WRITE_INTENSIVE_OPERATION',
+                chain: [
+                    'Heavy write operations (backup/batch)',
+                    'Write IOPS exhausted',
+                    'Read operations starved',
+                    'Burst credits depleted'
+                ],
+                confidence: 85
+            };
+        }
+        
+        return {
+            cause: 'INSUFFICIENT_DISK_TIER',
+            chain: [
+                'Disk tier too low for workload',
+                'IOPS limit hit regularly',
+                'Need higher provisioned IOPS',
+                'Or switch to io2/io3 type'
+            ],
+            confidence: 80
+        };
+    }
+    
+    getIOPSSolutions(metrics) {
+        return [
+            {
+                name: 'Upgrade Disk Type',
+                description: 'Switch to higher IOPS disk (gp3 → io2)',
+                impact: 'HIGH',
+                cost: 'MEDIUM',
+                timeToImplement: '30-60 min (maintenance)',
+                effectiveness: 100,
+                code: `
+# AWS: Modify volume type
+aws ec2 modify-volume --volume-id vol-xxx --volume-type io2 --iops 10000
+
+# Wait for optimization
+aws ec2 describe-volumes-modifications --volume-id vol-xxx`
+            },
+            {
+                name: 'Increase Provisioned IOPS',
+                description: 'Provision more IOPS on existing disk',
+                impact: 'IMMEDIATE',
+                cost: 'MEDIUM',
+                timeToImplement: '5 min',
+                effectiveness: 90,
+                code: `
+# gp3 allows IOPS provisioning independently
+aws ec2 modify-volume --volume-id vol-xxx --iops 6000`
+            },
+            {
+                name: 'Add Read Replica / Cache',
+                description: 'Reduce read IOPS by caching or read replicas',
+                impact: 'HIGH',
+                cost: 'MEDIUM',
+                timeToImplement: '1-2 hours',
+                effectiveness: 85,
+                code: `
+# Add Redis cache to reduce DB reads
+redis-cli CONFIG SET maxmemory 4gb
+redis-cli CONFIG SET maxmemory-policy allkeys-lru`
+            },
+            {
+                name: 'Optimize Queries',
+                description: 'Reduce unnecessary I/O operations',
+                impact: 'HIGH',
+                cost: 'LOW',
+                timeToImplement: '1-4 hours',
+                effectiveness: 75,
+                code: `
+-- Add indexes to reduce full table scans
+CREATE INDEX idx_timestamp ON events(timestamp);
+EXPLAIN ANALYZE SELECT * FROM events WHERE timestamp > now() - interval '1 day';`
+            }
+        ];
+    }
+    
+    getIOPSAutoFix() {
+        return {
+            type: 'IOPS_FIX',
+            actions: [
+                '1. Identify high-I/O queries: iotop -o',
+                '2. Increase provisioned IOPS temporarily',
+                '3. Enable query caching',
+                '4. Kill stuck I/O processes'
+            ],
+            estimatedTime: '5-10 minutes',
+            risk: 'LOW',
+            rollback: 'Restore original IOPS setting'
+        };
+    }
+    
+    // ==========================================
+    // 2. FILE DESCRIPTOR LIMIT DETECTOR
+    // ==========================================
+    async detectFileDescriptorLimit(metrics = {}) {
+        const problems = [];
+        
+        const fdUsed = metrics.fdUsed || 0;
+        const fdLimit = metrics.fdLimit || 1024;       // ulimit -n
+        const fdSoftLimit = metrics.fdSoftLimit || 1024;
+        const fdHardLimit = metrics.fdHardLimit || 4096;
+        const openFiles = metrics.openFiles || 0;
+        const socketFDs = metrics.socketFDs || 0;
+        const fileFDs = metrics.fileFDs || 0;
+        const leakedFDs = metrics.leakedFDs || 0;
+        const fdPercent = (fdUsed / fdLimit) * 100;
+        
+        // CRITICAL: FD limit reached
+        if (fdPercent >= this.thresholds.fdCritical) {
+            problems.push({
+                type: 'FD_LIMIT_CRITICAL',
+                severity: 'CRITICAL',
+                message: `File descriptors exhausted: ${fdUsed}/${fdLimit} (${fdPercent.toFixed(0)}%)`,
+                metrics: { fdUsed, fdLimit, openFiles, socketFDs, fileFDs },
+                impact: {
+                    service: 'Cannot open new files/sockets',
+                    errors: '"Too many open files" error',
+                    crash: 'Service may crash'
+                }
+            });
+        }
+        // HIGH: FD usage high
+        else if (fdPercent >= this.thresholds.fileDescriptor) {
+            problems.push({
+                type: 'FD_LIMIT_HIGH',
+                severity: 'HIGH',
+                message: `File descriptors high: ${fdUsed}/${fdLimit} (${fdPercent.toFixed(0)}%)`
+            });
+        }
+        
+        // Leaked file descriptors
+        if (leakedFDs > 100) {
+            problems.push({
+                type: 'FD_LEAK',
+                severity: 'CRITICAL',
+                message: `Possible FD leak: ${leakedFDs} leaked file descriptors`
+            });
+        }
+        
+        // Soft limit too low compared to usage
+        if (fdUsed > fdSoftLimit * 0.8 && fdSoftLimit < fdHardLimit) {
+            problems.push({
+                type: 'SOFT_LIMIT_TOO_LOW',
+                severity: 'MEDIUM',
+                message: `Soft limit (${fdSoftLimit}) too close to usage - Increase to hard limit (${fdHardLimit})`
+            });
+        }
+        
+        return {
+            problems,
+            rootCause: this.analyzeFDRootCause(metrics),
+            solutions: this.getFDSolutions(metrics),
+            autoFix: this.getFDAutoFix()
+        };
+    }
+    
+    analyzeFDRootCause(metrics) {
+        if (metrics.leakedFDs > 100) {
+            return {
+                cause: 'FILE_DESCRIPTOR_LEAK',
+                chain: [
+                    'Application opens files/sockets but doesn\'t close',
+                    'FD count grows over time',
+                    'Eventually hits ulimit',
+                    'New connections/files rejected',
+                    'Service becomes unresponsive'
+                ],
+                confidence: 93
+            };
+        }
+        
+        if (metrics.socketFDs > metrics.fileFDs * 5) {
+            return {
+                cause: 'CONNECTION_HEAVY_WORKLOAD',
+                chain: [
+                    'Too many concurrent connections',
+                    'Each connection uses a file descriptor',
+                    'Socket FDs exceed limit',
+                    'Cannot accept new connections'
+                ],
+                confidence: 88
+            };
+        }
+        
+        return {
+            cause: 'ULIMIT_TOO_LOW',
+            chain: [
+                'Default ulimit (1024) insufficient',
+                'Production workload needs more',
+                'Frequent "too many open files" errors',
+                'Need to increase system limits'
+            ],
+            confidence: 85
+        };
+    }
+    
+    getFDSolutions(metrics) {
+        return [
+            {
+                name: 'Increase File Descriptor Limit',
+                description: 'Raise ulimit for the process',
+                impact: 'IMMEDIATE',
+                cost: 'LOW',
+                timeToImplement: '2 min',
+                effectiveness: 90,
+                code: `
+# Temporary (current session)
+ulimit -n 65535
+
+# Permanent (/etc/security/limits.conf)
+*    soft    nofile    65535
+*    hard    nofile    65535
+
+# For systemd service
+[Service]
+LimitNOFILE=65535
+
+# Reload
+systemctl daemon-reload
+systemctl restart <service>`
+            },
+            {
+                name: 'Fix FD Leak in Code',
+                description: 'Close file descriptors after use',
+                impact: 'HIGH',
+                cost: 'LOW',
+                timeToImplement: '1-4 hours',
+                effectiveness: 95,
+                code: `
+// Node.js: Always close
+fs.readFile('file.txt', (err, data) => {
+    // File auto-closed
+});
+
+// Express: Close DB connections
+process.on('SIGTERM', async () => {
+    await mongoose.connection.close();
+    server.close();
+});`
+            },
+            {
+                name: 'Use Connection Pooling',
+                description: 'Reuse connections instead of opening new ones',
+                impact: 'HIGH',
+                cost: 'LOW',
+                timeToImplement: '30 min',
+                effectiveness: 85
+            }
+        ];
+    }
+    
+    getFDAutoFix() {
+        return {
+            type: 'FD_FIX',
+            actions: [
+                '1. Increase ulimit: ulimit -n 65535',
+                '2. Identify FD-heavy process: lsof -p <PID> | wc -l',
+                '3. Check for leaks: watch "lsof -p <PID> | wc -l"',
+                '4. Restart service if limit hit'
+            ],
+            estimatedTime: '2-5 minutes',
+            risk: 'LOW'
+        };
+    }
+    
+    // ==========================================
+    // 3. PROCESS LIMIT DETECTOR
+    // ==========================================
+    async detectProcessLimit(metrics = {}) {
+        const problems = [];
+        
+        const currentProcesses = metrics.currentProcesses || 0;
+        const maxProcesses = metrics.maxProcesses || 0;       // kernel.pid_max
+        const userProcesses = metrics.userProcesses || 0;
+        const maxUserProcesses = metrics.maxUserProcesses || 4096;
+        const zombieProcesses = metrics.zombieProcesses || 0;
+        const forkRate = metrics.forkRate || 0;               // forks per second
+        const processPercent = maxProcesses > 0 ? (currentProcesses / maxProcesses) * 100 : 0;
+        const userPercent = maxUserProcesses > 0 ? (userProcesses / maxUserProcesses) * 100 : 0;
+        
+        // CRITICAL: Process limit reached
+        if (processPercent >= 95) {
+            problems.push({
+                type: 'PROCESS_LIMIT_CRITICAL',
+                severity: 'CRITICAL',
+                message: `System process limit reached: ${currentProcesses}/${maxProcesses}`,
+                impact: 'Cannot create new processes - Fork will fail'
+            });
+        }
+        // HIGH: Process count high
+        else if (processPercent >= this.thresholds.processLimit) {
+            problems.push({
+                type: 'PROCESS_LIMIT_HIGH',
+                severity: 'HIGH',
+                message: `Process count high: ${currentProcesses}/${maxProcesses} (${processPercent.toFixed(0)}%)`
+            });
+        }
+        
+        // User process limit
+        if (userPercent >= this.thresholds.processLimit) {
+            problems.push({
+                type: 'USER_PROCESS_LIMIT',
+                severity: 'HIGH',
+                message: `User process limit near: ${userProcesses}/${maxUserProcesses}`
+            });
+        }
+        
+        // Zombie processes
+        if (zombieProcesses > 50) {
+            problems.push({
+                type: 'ZOMBIE_PROCESSES',
+                severity: 'MEDIUM',
+                message: `${zombieProcesses} zombie processes - May indicate parent process issue`
+            });
+        }
+        
+        // High fork rate
+        if (forkRate > 1000) {
+            problems.push({
+                type: 'FORK_BOMB_SUSPECTED',
+                severity: 'CRITICAL',
+                message: `High fork rate: ${forkRate}/sec - Possible fork bomb!`
+            });
+        }
+        
+        return {
+            problems,
+            rootCause: this.analyzeProcessRootCause(metrics),
+            solutions: this.getProcessSolutions(metrics),
+            autoFix: this.getProcessAutoFix()
+        };
+    }
+    
+    analyzeProcessRootCause(metrics) {
+        if (metrics.forkRate > 1000) {
+            return {
+                cause: 'FORK_BOMB_OR_RUNAWAY_PROCESS',
+                chain: ['Process spawning uncontrollably', 'Fork rate explodes', 'PID table fills', 'System becomes unresponsive'],
+                confidence: 90
+            };
+        }
+        
+        return {
+            cause: 'PROCESS_ACCUMULATION',
+            chain: ['Services not cleaning up child processes', 'Process count grows over time', 'PID table fills up', 'New processes blocked'],
+            confidence: 82
+        };
+    }
+    
+    getProcessSolutions(metrics) {
+        return [
+            {
+                name: 'Increase Process Limit',
+                description: 'Raise kernel.pid_max',
+                impact: 'IMMEDIATE',
+                cost: 'LOW',
+                timeToImplement: '1 min',
+                effectiveness: 80,
+                code: `
+# Check current limit
+cat /proc/sys/kernel/pid_max
+
+# Increase to 65536
+echo 65536 > /proc/sys/kernel/pid_max
+
+# Permanent
+echo "kernel.pid_max = 65536" >> /etc/sysctl.conf
+sysctl -p`
+            },
+            {
+                name: 'Kill Zombie Processes',
+                description: 'Clean up zombie processes',
+                impact: 'MEDIUM',
+                cost: 'LOW',
+                timeToImplement: '5 min',
+                effectiveness: 85,
+                code: `
+# Find zombies
+ps aux | grep 'Z'
+
+# Kill parent of zombies
+kill -9 <parent-pid>
+
+# Or restart the service
+systemctl restart <service>`
+            }
+        ];
+    }
+    
+    getProcessAutoFix() {
+        return {
+            type: 'PROCESS_FIX',
+            actions: [
+                '1. Increase kernel.pid_max if needed',
+                '2. Kill zombie processes',
+                '3. Kill runaway processes: kill -9 <PID>',
+                '4. Restart affected service'
+            ],
+            estimatedTime: '2-5 minutes',
+            risk: 'MEDIUM'
+        };
+    }
+    
+    // ==========================================
+    // 4. THREAD LIMIT DETECTOR
+    // ==========================================
+    async detectThreadLimit(metrics = {}) {
+        const problems = [];
+        
+        const currentThreads = metrics.currentThreads || 0;
+        const maxThreads = metrics.maxThreads || 0;           // kernel.threads-max
+        const threadPercent = maxThreads > 0 ? (currentThreads / maxThreads) * 100 : 0;
+        const threadsPerProcess = metrics.threadsPerProcess || {};
+        
+        // CRITICAL: Thread limit reached
+        if (threadPercent >= 95) {
+            problems.push({
+                type: 'THREAD_LIMIT_CRITICAL',
+                severity: 'CRITICAL',
+                message: `System thread limit reached: ${currentThreads}/${maxThreads}`,
+                impact: 'Cannot create new threads - Services will fail'
+            });
+        }
+        // HIGH: Thread usage high
+        else if (threadPercent >= this.thresholds.threadLimit) {
+            problems.push({
+                type: 'THREAD_LIMIT_HIGH',
+                severity: 'HIGH',
+                message: `Thread usage high: ${currentThreads}/${maxThreads} (${threadPercent.toFixed(0)}%)`
+            });
+        }
+        
+        // Check per-process thread count
+        for (const [pid, count] of Object.entries(threadsPerProcess)) {
+            if (count > 1000) {
+                problems.push({
+                    type: 'PROCESS_THREAD_HEAVY',
+                    severity: 'MEDIUM',
+                    message: `PID ${pid} has ${count} threads - Possible thread leak`
+                });
+            }
+        }
+        
+        return {
+            problems,
+            rootCause: {
+                cause: 'THREAD_EXHAUSTION',
+                chain: ['Too many threads created', 'Kernel thread table fills', 'Cannot create new threads', 'Services fail with "resource unavailable"'],
+                confidence: 88
+            },
+            solutions: [
+                {
+                    name: 'Increase Thread Limit',
+                    description: 'Raise kernel.threads-max',
+                    impact: 'IMMEDIATE',
+                    timeToImplement: '1 min',
+                    effectiveness: 80,
+                    code: `echo 500000 > /proc/sys/kernel/threads-max`
+                },
+                {
+                    name: 'Use Thread Pool',
+                    description: 'Limit threads with thread pool pattern',
+                    impact: 'LONG_TERM',
+                    timeToImplement: '1-3 days',
+                    effectiveness: 95
+                }
+            ],
+            autoFix: this.getThreadAutoFix()
+        };
+    }
+    
+    getThreadAutoFix() {
+        return {
+            type: 'THREAD_FIX',
+            actions: [
+                '1. Increase kernel.threads-max',
+                '2. Identify thread-heavy process: ps -eLf',
+                '3. Kill if thread leak suspected',
+                '4. Restart service'
+            ],
+            estimatedTime: '2-5 minutes',
+            risk: 'MEDIUM'
+        };
+    }
+    
+    // ==========================================
+    // 5. INODE USAGE FULL DETECTOR
+    // ==========================================
+    async detectInodeUsage(metrics = {}) {
+        const problems = [];
+        
+        const inodeUsed = metrics.inodeUsed || 0;
+        const inodeTotal = metrics.inodeTotal || 0;
+        const inodePercent = inodeTotal > 0 ? (inodeUsed / inodeTotal) * 100 : 0;
+        const mountPoint = metrics.mountPoint || '/';
+        const smallFiles = metrics.smallFiles || 0;          // Files < 1KB (inode wasters)
+        const tempFiles = metrics.tempFiles || 0;
+        const cacheFiles = metrics.cacheFiles || 0;
+        
+        // CRITICAL: Inode exhausted
+        if (inodePercent >= this.thresholds.inodeCritical) {
+            problems.push({
+                type: 'INODE_EXHAUSTED',
+                severity: 'CRITICAL',
+                message: `Inodes exhausted on ${mountPoint}: ${inodeUsed}/${inodeTotal} (${inodePercent.toFixed(0)}%)`,
+                impact: {
+                    error: '"No space left on device" even with free disk space',
+                    cause: 'Cannot create new files - inode limit hit!',
+                    risk: 'Services cannot write logs, temp files, etc.'
+                }
+            });
+        }
+        // HIGH: Inode usage high
+        else if (inodePercent >= this.thresholds.inodeUsage) {
+            problems.push({
+                type: 'INODE_HIGH',
+                severity: 'HIGH',
+                message: `Inode usage high: ${inodeUsed}/${inodeTotal} (${inodePercent.toFixed(0)}%)`
+            });
+        }
+        
+        // Many small files (inode wasters)
+        if (smallFiles > 100000) {
+            problems.push({
+                type: 'SMALL_FILE_OVERLOAD',
+                severity: 'MEDIUM',
+                message: `${smallFiles} small files consuming inodes unnecessarily`
+            });
+        }
+        
+        // Temp/cache file buildup
+        if (tempFiles > 50000 || cacheFiles > 50000) {
+            problems.push({
+                type: 'TEMP_CACHE_BUILDUP',
+                severity: 'MEDIUM',
+                message: `Temp/cache files: ${tempFiles + cacheFiles} - Clean up recommended`
+            });
+        }
+        
+        return {
+            problems,
+            rootCause: this.analyzeInodeRootCause(metrics),
+            solutions: this.getInodeSolutions(metrics),
+            autoFix: this.getInodeAutoFix()
+        };
+    }
+    
+    analyzeInodeRootCause(metrics) {
+        if (metrics.smallFiles > 100000) {
+            return {
+                cause: 'SMALL_FILE_ACCUMULATION',
+                chain: [
+                    'Application creates many small files',
+                    'Each file consumes 1 inode',
+                    'Inode table fills up',
+                    'Cannot create new files',
+                    'Disk shows space but "No space left" error'
+                ],
+                confidence: 90
+            };
+        }
+        
+        return {
+            cause: 'INODE_EXHAUSTION',
+            chain: [
+                'File system created with limited inodes',
+                'Many files created over time',
+                'Inode limit reached before disk space',
+                'Operations fail despite free disk space'
+            ],
+            confidence: 85
+        };
+    }
+    
+    getInodeSolutions(metrics) {
+        return [
+            {
+                name: 'Delete Unnecessary Small Files',
+                description: 'Find and remove temp/cache files',
+                impact: 'IMMEDIATE',
+                cost: 'LOW',
+                timeToImplement: '10-30 min',
+                effectiveness: 95,
+                code: `
+# Find directories with most files (inodes)
+for dir in /*; do
+    echo "$(find $dir -type f | wc -l) $dir"
+done | sort -rn | head -10
+
+# Delete temp files older than 7 days
+find /tmp -type f -mtime +7 -delete
+find /var/tmp -type f -mtime +7 -delete
+
+# Clean package manager cache
+apt clean        # Debian/Ubuntu
+yum clean all    # CentOS/RHEL`
+            },
+            {
+                name: 'Recreate Filesystem with More Inodes',
+                description: 'Format with higher inode ratio (downtime required)',
+                impact: 'PERMANENT',
+                cost: 'HIGH',
+                timeToImplement: '1-2 hours + downtime',
+                effectiveness: 100,
+                code: `
+# mkfs with more inodes
+mkfs.ext4 -i 4096 /dev/sdb1  # 1 inode per 4KB (default: 16KB)`
+            }
+        ];
+    }
+    
+    getInodeAutoFix() {
+        return {
+            type: 'INODE_FIX',
+            actions: [
+                '1. Find inode-heavy dirs: du --inodes -d 2 / | sort -rn | head',
+                '2. Clean /tmp files older than 7 days',
+                '3. Clean package cache',
+                '4. Compress old logs: find /var/log -name "*.log.*" -exec gzip {} \\;'
+            ],
+            estimatedTime: '5-15 minutes',
+            risk: 'LOW'
+        };
+    }
+    
+    // ==========================================
+    // 6. QUOTA EXCEEDED DETECTOR
+    // ==========================================
+    async detectQuotaExceeded(metrics = {}) {
+        const problems = [];
+        
+        const userQuotas = metrics.userQuotas || [];
+        const groupQuotas = metrics.groupQuotas || [];
+        const projectQuotas = metrics.projectQuotas || [];
+        const diskQuota = metrics.diskQuota || {};
+        
+        // Check user quotas
+        for (const quota of userQuotas) {
+            const diskPercent = quota.limit > 0 ? (quota.used / quota.limit) * 100 : 0;
+            const inodePercent = quota.inodeLimit > 0 ? (quota.inodeUsed / quota.inodeLimit) * 100 : 0;
+            
+            if (diskPercent >= this.thresholds.quotaCritical) {
+                problems.push({
+                    type: 'USER_QUOTA_CRITICAL',
+                    severity: 'CRITICAL',
+                    message: `User ${quota.user}: Disk quota ${diskPercent.toFixed(0)}% (${quota.used}/${quota.limit})`
+                });
+            } else if (diskPercent >= this.thresholds.quotaUsage) {
+                problems.push({
+                    type: 'USER_QUOTA_HIGH',
+                    severity: 'HIGH',
+                    message: `User ${quota.user}: Disk quota ${diskPercent.toFixed(0)}%`
+                });
+            }
+            
+            // Inode quota
+            if (inodePercent >= this.thresholds.quotaCritical) {
+                problems.push({
+                    type: 'USER_INODE_QUOTA_CRITICAL',
+                    severity: 'CRITICAL',
+                    message: `User ${quota.user}: Inode quota ${inodePercent.toFixed(0)}%`
+                });
+            }
+        }
+        
+        // Check project quotas (e.g., XFS project quotas)
+        for (const quota of projectQuotas) {
+            if (quota.usedPercent >= this.thresholds.quotaCritical) {
+                problems.push({
+                    type: 'PROJECT_QUOTA_EXCEEDED',
+                    severity: 'CRITICAL',
+                    message: `Project ${quota.project}: Quota ${quota.usedPercent.toFixed(0)}%`
+                });
+            }
+        }
+        
+        // Overall disk quota (cloud context)
+        if (diskQuota.totalLimit > 0) {
+            const totalPercent = (diskQuota.totalUsed / diskQuota.totalLimit) * 100;
+            if (totalPercent >= this.thresholds.quotaCritical) {
+                problems.push({
+                    type: 'DISK_QUOTA_CRITICAL',
+                    severity: 'CRITICAL',
+                    message: `Total disk quota: ${totalPercent.toFixed(0)}% (${diskQuota.totalUsed}/${diskQuota.totalLimit})`
+                });
+            }
+        }
+        
+        return {
+            problems,
+            rootCause: this.analyzeQuotaRootCause(metrics),
+            solutions: this.getQuotaSolutions(metrics),
+            autoFix: this.getQuotaAutoFix()
+        };
+    }
+    
+    analyzeQuotaRootCause(metrics) {
+        return {
+            cause: 'QUOTA_EXHAUSTION',
+            chain: [
+                'User/Project exceeds allocated quota',
+                'Cannot write new data',
+                'Application errors ("Disk quota exceeded")',
+                'Need to either clean up or increase quota'
+            ],
+            confidence: 95
+        };
+    }
+    
+    getQuotaSolutions(metrics) {
+        return [
+            {
+                name: 'Increase Quota',
+                description: 'Allocate more space to user/project',
+                impact: 'IMMEDIATE',
+                timeToImplement: '2 min',
+                effectiveness: 100,
+                code: `
+# Set new quota for user
+setquota -u username 20G 25G 0 0 /home
+
+# For XFS project quota
+xfs_quota -x -c 'limit -p bhard=50g project_id' /mount`
+            },
+            {
+                name: 'Clean User Files',
+                description: 'Remove old/unnecessary files',
+                impact: 'MEDIUM',
+                timeToImplement: '10-30 min',
+                effectiveness: 85,
+                code: `
+# Find large files for user
+find /home/username -type f -size +100M -exec ls -lh {} \\;
+
+# Delete files older than 90 days
+find /home/username -type f -mtime +90 -delete`
+            }
+        ];
+    }
+    
+    getQuotaAutoFix() {
+        return {
+            type: 'QUOTA_FIX',
+            actions: [
+                '1. Identify over-quota user: repquota -a',
+                '2. Temporarily increase quota limit',
+                '3. Notify user to clean up',
+                '4. Delete old temp files'
+            ],
+            estimatedTime: '5-10 minutes',
+            risk: 'LOW'
+        };
+    }
+    
+    // ==========================================
+    // COMPLETE RESOURCE SCAN (All 10)
+    // ==========================================
+    async fullResourceScan(systemMetrics = {}) {
+        console.log('\n📊 Full Resource Scan (10/10)...');
+        
+        const results = {
+            timestamp: new Date().toISOString(),
+            problems: [],
+            summary: { total: 0, critical: 0, high: 0, medium: 0 }
+        };
+        
+        // 1. CPU Throttling
+        if (systemMetrics.cpuThrottle > this.thresholds.cpuThrottle) {
+            results.problems.push({
+                type: 'CPU_THROTTLING',
+                severity: 'CRITICAL',
+                message: `CPU throttling at ${systemMetrics.cpuThrottle}%`
+            });
+        }
+        
+        // 2. Memory Limit
+        if (systemMetrics.memoryUsage > this.thresholds.memoryLimit) {
+            results.problems.push({
+                type: 'MEMORY_LIMIT',
+                severity: 'CRITICAL',
+                message: `Memory at ${systemMetrics.memoryUsage}%`
+            });
+        }
+        
+        // 3. Disk IOPS Limit (NEW)
+        const iopsResults = await this.detectDiskIOPSLimit(systemMetrics);
+        results.problems.push(...iopsResults.problems);
+        
+        // 4. Network Packet Loss
+        if (systemMetrics.packetLoss > this.thresholds.networkPacketLoss) {
+            results.problems.push({
+                type: 'PACKET_LOSS',
+                severity: 'HIGH',
+                message: `Packet loss: ${systemMetrics.packetLoss}%`
+            });
+        }
+        
+        // 5. File Descriptor Limit (NEW)
+        const fdResults = await this.detectFileDescriptorLimit(systemMetrics);
+        results.problems.push(...fdResults.problems);
+        
+        // 6. Process Limit (NEW)
+        const processResults = await this.detectProcessLimit(systemMetrics);
+        results.problems.push(...processResults.problems);
+        
+        // 7. Thread Limit (NEW)
+        const threadResults = await this.detectThreadLimit(systemMetrics);
+        results.problems.push(...threadResults.problems);
+        
+        // 8. Connection Limit
+        if (systemMetrics.connectionUsage > this.thresholds.connectionLimit) {
+            results.problems.push({
+                type: 'CONNECTION_LIMIT',
+                severity: 'HIGH',
+                message: `Connections at ${systemMetrics.connectionUsage}%`
+            });
+        }
+        
+        // 9. Inode Usage (NEW)
+        const inodeResults = await this.detectInodeUsage(systemMetrics);
+        results.problems.push(...inodeResults.problems);
+        
+        // 10. Quota Exceeded (NEW)
+        const quotaResults = await this.detectQuotaExceeded(systemMetrics);
+        results.problems.push(...quotaResults.problems);
+        
+        // Summary
+        results.summary.total = results.problems.length;
+        results.summary.critical = results.problems.filter(p => p.severity === 'CRITICAL').length;
+        results.summary.high = results.problems.filter(p => p.severity === 'HIGH').length;
+        results.summary.medium = results.problems.filter(p => p.severity === 'MEDIUM').length;
+        
+        return results;
+    }
+}
+
+// ============================================
+// TEST
+// ============================================
+async function test() {
+    const detector = new ResourceDetectorComplete();
+    
+    // Full scan test
+    const full = await detector.fullResourceScan({
+        cpuThrottle: 95,
+        memoryUsage: 92,
+        currentIOPS: 2850,
+        provisionedIOPS: 3000,
+        burstBalance: 15,
+        fdUsed: 900,
+        fdLimit: 1024,
+        currentProcesses: 31000,
+        maxProcesses: 32768,
+        currentThreads: 480000,
+        maxThreads: 500000,
+        connectionUsage: 95,
+        inodeUsed: 950000,
+        inodeTotal: 1000000,
+        userQuotas: [{ user: 'appuser', used: '18G', limit: '20G', inodeUsed: 90000, inodeLimit: 100000 }]
+    });
+    
+    console.log('📊 Full Resource Scan Results:');
+    console.log(`   Total: ${full.summary.total}`);
+    console.log(`   Critical: ${full.summary.critical}`);
+    console.log(`   High: ${full.summary.high}`);
+}
+
+// test();
+
+module.exports = { ResourceDetectorComplete };
 
