@@ -1,1 +1,46 @@
+require('dotenv').config();
+const { createApp } = require('./app');
+const { connectDatabase } = require('./config/database');
+const { setupLogger } = require('./config/logger');
+const { initializeCronJobs } = require('./jobs/cron');
+
+const PORT = process.env.PORT || 3000;
+
+async function start() {
+    try {
+        // Setup logger
+        const logger = setupLogger();
+        logger.info('🚀 Starting Supreme Detector SAAS...');
+        
+        // Connect databases
+        await connectDatabase();
+        logger.info('✅ Databases connected');
+        
+        // Create Express app
+        const app = await createApp();
+        
+        // Initialize cron jobs
+        initializeCronJobs();
+        logger.info('✅ Cron jobs scheduled');
+        
+        // Start server
+        app.listen(PORT, () => {
+            logger.info(`
+    ╔══════════════════════════════════════╗
+    ║   🚀 SUPREME DETECTOR SAAS          ║
+    ║   ✅ Multi-Tenant                   ║
+    ║   ✅ Subscriptions Ready            ║
+    ║   ✅ Production Grade               ║
+    ║   🌐 http://localhost:${PORT}           ║
+    ╚══════════════════════════════════════╝
+            `);
+        });
+        
+    } catch (error) {
+        console.error('Failed to start:', error);
+        process.exit(1);
+    }
+}
+
+start();
 
