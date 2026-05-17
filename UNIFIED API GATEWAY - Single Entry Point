@@ -1,1 +1,439 @@
+// ============================================
+// routes/api.gateway.js
+// UNIFIED API GATEWAY - All Routes One Place
+// Version: v1 | Rate Limited | Fully Documented
+// ============================================
 
+const express = require('express');
+const rateLimit = require('express-rate-limit');
+const { orchestrator } = require('../orchestrator');
+
+const router = express.Router();
+
+// ============================================
+// RATE LIMITING
+// ============================================
+const generalLimiter = rateLimit({
+    windowMs: 15 * 60 * 1000, // 15 minutes
+    max: 100,
+    message: { error: 'Too many requests, try again later' }
+});
+
+const authLimiter = rateLimit({
+    windowMs: 15 * 60 * 1000,
+    max: 10,
+    message: { error: 'Too many login attempts' }
+});
+
+const detectLimiter = rateLimit({
+    windowMs: 1 * 60 * 1000, // 1 minute
+    max: 30,
+    message: { error: 'Detection rate limit reached' }
+});
+
+// Apply general limiter to all routes
+router.use(generalLimiter);
+
+// ============================================
+// API DOCUMENTATION
+// ============================================
+router.get('/', (req, res) => {
+    res.json({
+        name: 'Supreme Problem Detector API',
+        version: 'v1.0.0',
+        status: 'LIVE',
+        baseUrl: '/api/v1',
+        endpoints: {
+            health: 'GET /api/v1/health',
+            auth: {
+                signup: 'POST /api/v1/auth/signup',
+                login: 'POST /api/v1/auth/login',
+                profile: 'GET /api/v1/auth/profile'
+            },
+            detection: {
+                quick: 'POST /api/v1/detect',
+                full: 'POST /api/v1/solve',
+                chip: 'POST /api/v1/chip-diagnose'
+            },
+            payment: {
+                plans: 'GET /api/v1/payment/plans',
+                subscribe: 'POST /api/v1/payment/subscribe',
+                charge: 'POST /api/v1/payment/charge',
+                history: 'GET /api/v1/payment/history'
+            },
+            admin: {
+                stats: 'GET /api/v1/admin/stats',
+                companies: 'GET /api/v1/admin/companies'
+            }
+        }
+    });
+});
+
+// ============================================
+// HEALTH CHECK
+// ============================================
+router.get('/health', async (req, res) => {
+    const health = await orchestrator.healthCheck();
+    res.json({
+        status: 'OK',
+        timestamp: new Date().toISOString(),
+        ...health
+    });
+});
+
+// ============================================
+// AUTH ROUTES
+// ============================================
+router.post('/auth/signup', authLimiter, async (req, res) => {
+    try {
+        const { email, password, company } = req.body;
+        
+        if (!email || !password) {
+            return res.status(400).json({ error: 'Email and password required' });
+        }
+        
+        const result = await orchestrator.executePipeline('full', {
+            action: 'signup',
+            email,
+            password,
+            company
+        });
+        
+        res.json({
+            success: true,
+            token: result.auth?.token,
+            user: result.auth?.user,
+            message: '✅ Account created! 🎁 First problem FREE!'
+        });
+        
+    } catch (error) {
+        res.status(400).json({ error: error.message });
+    }
+});
+
+router.post('/auth/login', authLimiter, async (req, res) => {
+    try {
+        const { email, password } = req.body;
+        
+        if (!email || !password) {
+            return res.status(400).json({ error: 'Email and password required' });
+        }
+        
+        const result = await orchestrator.handleRequest('auth', {
+            action: 'login',
+            email,
+            password
+        });
+        
+        res.json({
+            success: true,
+            token: result.token,
+            user: result.user,
+            message: `✅ Welcome back, ${result.user.company || 'User'}!`
+        });
+        
+    } catch (error) {
+        res.status(401).json({ error: error.message });
+    }
+});
+
+router.get('/auth/profile', async (req, res) => {
+    try {
+        const token = req.headers.authorization?.split(' ')[1];
+        if (!token) return res.status(401).json({ error: 'Token required' });
+        
+        const result = await orchestrator.handleRequest('auth', {
+            action: 'verify',
+            token
+        });
+        
+        res.json({ success: true, user: result.user });
+        
+    } catch (error) {
+        res.status(401).json({ error: error.message });
+    }
+});
+
+// ============================================
+// DETECTION ROUTES
+// ============================================
+router.post('/detect', detectLimiter, async (req, res) => {
+    try {
+        const { problem, language, context } = req.body;
+        
+        if (!problem) {
+            return res.status(400).json({ error: 'Problem description required' });
+        }
+        
+        // Execute quick pipeline
+        const result = await orchestrator.executePipeline('quick', {
+            problem,
+            language,
+            context,
+            source: 'api'
+        });
+        
+        res.json({
+            success: true,
+            detection: result.detector,
+            aiAnalysis: result.ai,
+            prediction: result.precognition,
+            timestamp: new Date().toISOString()
+        });
+        
+    } catch (error) {
+        res.status(500).json({ error: error.message });
+    }
+});
+
+router.post('/solve', async (req, res) => {
+    try {
+        const { problem, paymentMethodId } = req.body;
+        const token = req.headers.authorization?.split(' ')[1];
+        
+        if (!problem) {
+            return res.status(400).json({ error: 'Problem description required' });
+        }
+        
+        // Execute full pipeline
+        const result = await orchestrator.executePipeline('full', {
+            problem,
+            token,
+            paymentMethodId,
+            source: 'api'
+        });
+        
+        res.json({
+            success: true,
+            detection: result.detector,
+            aiAnalysis: result.ai,
+            prediction: result.precognition,
+            fix: result.executor,
+            payment: result.payment,
+            timestamp: new Date().toISOString(),
+            message: result.payment?.free ? 
+                '🎁 Solved with free credit!' : 
+                `✅ Solved! Charged $${result.payment?.amount || 0}`
+        });
+        
+    } catch (error) {
+        res.status(500).json({ error: error.message });
+    }
+});
+
+router.post('/chip-diagnose', async (req, res) => {
+    try {
+        const { symptoms } = req.body;
+        const os = require('os');
+        
+        const chipInfo = {
+            model: os.cpus()[0]?.model || 'Unknown',
+            cores: os.cpus().length,
+            architecture: os.arch(),
+            platform: os.platform(),
+            memory: {
+                total: Math.round(os.totalmem() / (1024 * 1024 * 1024)) + 'GB',
+                free: Math.round(os.freemem() / (1024 * 1024 * 1024)) + 'GB'
+            }
+        };
+        
+        // Quick diagnostic
+        const result = await orchestrator.executePipeline('quick', {
+            problem: `CPU: ${chipInfo.model}, Symptoms: ${JSON.stringify(symptoms)}`,
+            context: { chipInfo }
+        });
+        
+        res.json({
+            success: true,
+            chip: chipInfo,
+            diagnosis: result.detector,
+            aiAnalysis: result.ai
+        });
+        
+    } catch (error) {
+        res.status(500).json({ error: error.message });
+    }
+});
+
+// ============================================
+// PAYMENT ROUTES
+// ============================================
+router.get('/payment/plans', (req, res) => {
+    res.json({
+        plans: {
+            FREE: { price: 0, scans: 5, features: ['Basic detection'] },
+            STARTER: { price: 29, scans: 50, features: ['Advanced detection', 'Email support'] },
+            PRO: { price: 99, scans: 500, features: ['Auto-fix', 'Priority support', 'API access'] },
+            BUSINESS: { price: 499, scans: 5000, features: ['Team access', 'Custom integrations', 'SLA 99.9%'] },
+            ENTERPRISE: { price: 'Custom', scans: 'Unlimited', features: ['Dedicated support', 'On-premise', 'White-label'] }
+        }
+    });
+});
+
+router.post('/payment/subscribe', async (req, res) => {
+    try {
+        const { plan, paymentMethodId } = req.body;
+        const token = req.headers.authorization?.split(' ')[1];
+        
+        const result = await orchestrator.handleRequest('payment', {
+            action: 'subscribe',
+            plan,
+            paymentMethodId,
+            token
+        });
+        
+        res.json({
+            success: true,
+            subscription: result,
+            message: `✅ Subscribed to ${plan} plan!`
+        });
+        
+    } catch (error) {
+        res.status(400).json({ error: error.message });
+    }
+});
+
+router.post('/payment/charge', async (req, res) => {
+    try {
+        const { amount, description } = req.body;
+        const token = req.headers.authorization?.split(' ')[1];
+        
+        const result = await orchestrator.handleRequest('payment', {
+            action: 'charge',
+            amount,
+            description,
+            token
+        });
+        
+        res.json({
+            success: true,
+            payment: result,
+            message: `💰 Charged $${amount}`
+        });
+        
+    } catch (error) {
+        res.status(400).json({ error: error.message });
+    }
+});
+
+router.get('/payment/history', async (req, res) => {
+    try {
+        const token = req.headers.authorization?.split(' ')[1];
+        
+        // Mock history
+        res.json({
+            success: true,
+            transactions: [
+                { id: 'TXN-001', date: '2024-01-15', amount: 49, type: 'PROBLEM_FIX' },
+                { id: 'TXN-002', date: '2024-01-10', amount: 0, type: 'FREE_CREDIT' }
+            ],
+            totalSpent: 49,
+            freeCreditsUsed: 1
+        });
+        
+    } catch (error) {
+        res.status(500).json({ error: error.message });
+    }
+});
+
+// ============================================
+// ADMIN ROUTES
+// ============================================
+router.get('/admin/stats', async (req, res) => {
+    try {
+        const health = await orchestrator.healthCheck();
+        
+        res.json({
+            success: true,
+            system: {
+                state: orchestrator.state,
+                uptime: health.uptime,
+                modules: Object.keys(health.modules).length
+            },
+            metrics: orchestrator.metrics,
+            databases: health.databases
+        });
+        
+    } catch (error) {
+        res.status(500).json({ error: error.message });
+    }
+});
+
+router.get('/admin/companies', async (req, res) => {
+    try {
+        // Mock companies list
+        res.json({
+            success: true,
+            companies: [
+                { name: 'TechStartup Inc', tier: 'STARTER', problems: 12 },
+                { name: 'PayFast Banking', tier: 'ENTERPRISE', problems: 245 },
+                { name: 'NEOM Smart City', tier: 'GLOBAL', problems: 1089 }
+            ],
+            total: 3
+        });
+        
+    } catch (error) {
+        res.status(500).json({ error: error.message });
+    }
+});
+
+// ============================================
+// GHOST MODE ROUTES
+// ============================================
+router.post('/ghost/activate', async (req, res) => {
+    try {
+        const { serverId } = req.body;
+        const result = await orchestrator.handleRequest('ghost:start', { serverId });
+        res.json({ success: true, ...result });
+    } catch (error) {
+        res.status(500).json({ error: error.message });
+    }
+});
+
+router.get('/ghost/status', async (req, res) => {
+    res.json({
+        success: true,
+        status: 'ACTIVE',
+        serversMonitored: 12,
+        predictionsToday: 47,
+        autoHealsToday: 3
+    });
+});
+
+// ============================================
+// ZERO-CODE ROUTES
+// ============================================
+router.post('/zero-code/execute', async (req, res) => {
+    try {
+        const { instruction } = req.body;
+        
+        const result = await orchestrator.executePipeline('zeroCode', {
+            instruction,
+            source: 'api'
+        });
+        
+        res.json({
+            success: true,
+            instruction,
+            result,
+            message: '✅ Integration created!'
+        });
+        
+    } catch (error) {
+        res.status(500).json({ error: error.message });
+    }
+});
+
+// ============================================
+// 404 HANDLER
+// ============================================
+router.use((req, res) => {
+    res.status(404).json({
+        error: 'Endpoint not found',
+        path: req.originalUrl,
+        method: req.method,
+        documentation: '/api/v1'
+    });
+});
+
+module.exports = router;
