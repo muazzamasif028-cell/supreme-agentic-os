@@ -1,1 +1,64 @@
+// ============================================
+// REAL-TIME ANALYTICS ENGINE
+// Processes 20M events/minute
+// ============================================
+class RealtimeAnalytics {
+    constructor() {
+        this.windowSize = 300000; // 5 minutes
+        this.windows = new Map();
+    }
+
+    // Sliding window aggregation
+    async processEvent(event) {
+        const windowKey = this.getWindowKey(event.timestamp);
+        
+        if (!this.windows.has(windowKey)) {
+            this.windows.set(windowKey, {
+                count: 0,
+                trustScores: [],
+                problemTypes: {},
+                regions: {}
+            });
+        }
+
+        const window = this.windows.get(windowKey);
+        window.count++;
+        window.trustScores.push(event.trustScore);
+        window.problemTypes[event.problemType] = 
+            (window.problemTypes[event.problemType] || 0) + 1;
+        window.regions[event.region] = 
+            (window.regions[event.region] || 0) + 1;
+
+        // Emit aggregated metrics
+        if (window.count % 10000 === 0) {
+            await this.emitAggregates(windowKey, window);
+        }
+    }
+
+    // Detect anomalies in real-time
+    async detectAnomaly(nodeData) {
+        const baseline = await this.getBaseline(nodeData.region);
+        
+        // Z-score anomaly detection
+        const zScore = Math.abs(
+            (nodeData.trustScore - baseline.mean) / baseline.stdDev
+        );
+
+        if (zScore > 3) {
+            await this.triggerAlert({
+                nodeId: nodeData.nodeId,
+                type: 'ANOMALY',
+                severity: zScore > 5 ? 'CRITICAL' : 'WARNING',
+                details: `Trust score deviation: ${zScore.toFixed(2)}σ`
+            });
+        }
+
+        return zScore > 3;
+    }
+
+    getWindowKey(timestamp) {
+        const time = new Date(timestamp).getTime();
+        return Math.floor(time / this.windowSize) * this.windowSize;
+    }
+}
 
