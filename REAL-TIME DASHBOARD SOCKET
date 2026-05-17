@@ -1,1 +1,582 @@
+// ============================================
+// dashboard/socket.js
+// Real-Time Dashboard - Live Updates via WebSocket
+// Multi-Tenant, Live Metrics, Instant Alerts
+// ============================================
 
+const { Server } = require('socket.io');
+const jwt = require('jsonwebtoken');
+const os = require('os');
+
+class DashboardSocket {
+    
+    constructor(server) {
+        this.io = new Server(server, {
+            cors: {
+                origin: '*',
+                methods: ['GET', 'POST']
+            },
+            pingTimeout: 60000,
+            pingInterval: 25000
+        });
+        
+        // Active rooms & users
+        this.rooms = new Map();
+        this.users = new Map();
+        this.metricsInterval = null;
+        
+        // Dashboard metrics cache
+        this.cache = {
+            systemMetrics: {},
+            problems: [],
+            alerts: [],
+            stats: {}
+        };
+        
+        this.init();
+    }
+    
+    // ==========================================
+    // INITIALIZE SOCKET SERVER
+    // ==========================================
+    init() {
+        // Auth middleware
+        this.io.use(async (socket, next) => {
+            try {
+                const token = socket.handshake.auth.token || 
+                             socket.handshake.query.token;
+                
+                if (token) {
+                    const user = jwt.verify(token, process.env.JWT_SECRET || 'secret');
+                    socket.user = user;
+                    socket.tenantId = user.company || user.id;
+                } else {
+                    socket.user = { role: 'guest', tier: 'FREE' };
+                    socket.tenantId = 'public';
+                }
+                
+                next();
+            } catch {
+                socket.user = { role: 'guest', tier: 'FREE' };
+                socket.tenantId = 'public';
+                next();
+            }
+        });
+        
+        // Handle connections
+        this.io.on('connection', (socket) => {
+            this.handleConnection(socket);
+        });
+        
+        // Start broadcasting metrics
+        this.startMetricsBroadcast();
+        
+        console.log('📊 Dashboard Socket Ready');
+    }
+    
+    // ==========================================
+    // HANDLE NEW CONNECTION
+    // ==========================================
+    handleConnection(socket) {
+        const userId = socket.user?.id || socket.id;
+        const tenantId = socket.tenantId;
+        
+        console.log(`🔌 Connected: ${socket.user?.email || 'Guest'} (${tenantId})`);
+        
+        // Track user
+        this.users.set(socket.id, {
+            id: userId,
+            email: socket.user?.email,
+            tenantId,
+            connectedAt: new Date(),
+            ip: socket.handshake.address
+        });
+        
+        // Join tenant room
+        socket.join(`tenant:${tenantId}`);
+        
+        // Join role-specific rooms
+        if (socket.user?.role === 'admin') {
+            socket.join('admin');
+        }
+        if (socket.user?.tier === 'ENTERPRISE' || socket.user?.tier === 'GLOBAL') {
+            socket.join('enterprise');
+        }
+        
+        // Send welcome data
+        socket.emit('welcome', {
+            message: '✅ Connected to Supreme Dashboard',
+            user: socket.user,
+            timestamp: new Date().toISOString(),
+            tenantId
+        });
+        
+        // Send initial metrics
+        socket.emit('metrics:update', this.getSystemMetrics());
+        socket.emit('stats:update', this.getStats(tenantId));
+        
+        // ==========================================
+        // SUBSCRIPTIONS (Client Requests)
+        // ==========================================
+        
+        // Subscribe to real-time metrics
+        socket.on('subscribe:metrics', (config) => {
+            console.log(`   📊 ${socket.id} subscribed to metrics`);
+            socket.join(`metrics:${tenantId}`);
+            socket.emit('metrics:update', this.getSystemMetrics());
+        });
+        
+        // Subscribe to alerts
+        socket.on('subscribe:alerts', () => {
+            console.log(`   🚨 ${socket.id} subscribed to alerts`);
+            socket.join(`alerts:${tenantId}`);
+            socket.emit('alerts:update', this.getAlerts(tenantId));
+        });
+        
+        // Subscribe to problem feed
+        socket.on('subscribe:problems', () => {
+            console.log(`   🔍 ${socket.id} subscribed to problems`);
+            socket.join(`problems:${tenantId}`);
+            socket.emit('problems:list', this.getProblems(tenantId));
+        });
+        
+        // Subscribe to ghost mode
+        socket.on('subscribe:ghost', () => {
+            if (socket.user?.tier === 'ENTERPRISE' || socket.user?.tier === 'GLOBAL') {
+                socket.join(`ghost:${tenantId}`);
+                socket.emit('ghost:update', this.getGhostStatus(tenantId));
+            }
+        });
+        
+        // Request specific metric
+        socket.on('metric:request', (metricName) => {
+            const value = this.getSpecificMetric(metricName);
+            socket.emit('metric:value', { name: metricName, value });
+        });
+        
+        // ==========================================
+        // CLIENT ACTIONS
+        // ==========================================
+        
+        // Acknowledge alert
+        socket.on('alert:acknowledge', (alertId) => {
+            this.acknowledgeAlert(tenantId, alertId, socket.user?.email);
+            this.io.to(`alerts:${tenantId}`).emit('alert:updated', {
+                id: alertId,
+                acknowledged: true,
+                acknowledgedBy: socket.user?.email
+            });
+        });
+        
+        // Resolve alert
+        socket.on('alert:resolve', (alertId) => {
+            this.resolveAlert(tenantId, alertId);
+            this.io.to(`alerts:${tenantId}`).emit('alert:resolved', { id: alertId });
+        });
+        
+        // Apply fix
+        socket.on('fix:apply', async (data) => {
+            console.log(`   🔧 Applying fix: ${data.problemId}`);
+            socket.emit('fix:status', { 
+                problemId: data.problemId, 
+                status: 'APPLYING' 
+            });
+            
+            // Simulate fix
+            setTimeout(() => {
+                socket.emit('fix:status', { 
+                    problemId: data.problemId, 
+                    status: 'COMPLETED',
+                    result: { cpu: 45, memory: 60 }
+                });
+                
+                // Broadcast update
+                this.io.to(`problems:${tenantId}`).emit('problem:updated', {
+                    id: data.problemId,
+                    status: 'RESOLVED'
+                });
+            }, 3000);
+        });
+        
+        // ==========================================
+        // DISCONNECT
+        // ==========================================
+        socket.on('disconnect', () => {
+            console.log(`🔌 Disconnected: ${socket.user?.email || 'Guest'}`);
+            this.users.delete(socket.id);
+            
+            // Update active user count
+            this.io.to('admin').emit('users:count', this.users.size);
+        });
+    }
+    
+    // ==========================================
+    // BROADCAST METRICS (Every 5 seconds)
+    // ==========================================
+    startMetricsBroadcast() {
+        this.metricsInterval = setInterval(() => {
+            const metrics = this.getSystemMetrics();
+            const stats = this.getStats();
+            
+            // Broadcast to all metric subscribers
+            this.io.to(/metrics:.*/).emit('metrics:update', metrics);
+            
+            // Broadcast stats to admin
+            this.io.to('admin').emit('stats:update', stats);
+            
+            // Update cache
+            this.cache.systemMetrics = metrics;
+            this.cache.stats = stats;
+            
+        }, 5000);
+        
+        // Alert check (every 30 seconds)
+        setInterval(() => {
+            const alerts = this.getAlerts();
+            if (alerts.length > 0) {
+                this.io.to(/alerts:.*/).emit('alerts:update', alerts);
+                this.cache.alerts = alerts;
+            }
+        }, 30000);
+    }
+    
+    // ==========================================
+    // METRICS COLLECTION
+    // ==========================================
+    getSystemMetrics() {
+        const totalMem = os.totalmem();
+        const freeMem = os.freemem();
+        const usedMem = totalMem - freeMem;
+        
+        return {
+            timestamp: new Date().toISOString(),
+            system: {
+                cpu: {
+                    usage: this.getCPUUsage(),
+                    cores: os.cpus().length,
+                    model: os.cpus()[0]?.model,
+                    loadAvg: os.loadavg()
+                },
+                memory: {
+                    total: Math.round(totalMem / (1024 * 1024 * 1024)) + 'GB',
+                    used: Math.round(usedMem / (1024 * 1024 * 1024)) + 'GB',
+                    free: Math.round(freeMem / (1024 * 1024 * 1024)) + 'GB',
+                    usagePercent: Math.round((usedMem / totalMem) * 100)
+                },
+                uptime: Math.floor(os.uptime()),
+                platform: os.platform(),
+                hostname: os.hostname()
+            },
+            application: {
+                nodeVersion: process.version,
+                memoryUsage: Math.round(process.memoryUsage().heapUsed / (1024 * 1024)) + 'MB',
+                activeConnections: this.io.engine.clientsCount,
+                activeUsers: this.users.size
+            },
+            network: {
+                bytesIn: 0,  // Would come from network monitoring
+                bytesOut: 0,
+                requestsPerSec: 0
+            }
+        };
+    }
+    
+    getCPUUsage() {
+        const cpus = os.cpus();
+        let totalIdle = 0, totalTick = 0;
+        
+        cpus.forEach(cpu => {
+            for (const type in cpu.times) {
+                totalTick += cpu.times[type];
+            }
+            totalIdle += cpu.times.idle;
+        });
+        
+        const idle = totalIdle / cpus.length;
+        const total = totalTick / cpus.length;
+        
+        return Math.round(100 - (idle / total) * 100);
+    }
+    
+    getSpecificMetric(name) {
+        const metrics = {
+            cpu: this.getCPUUsage(),
+            memory: Math.round((1 - os.freemem() / os.totalmem()) * 100),
+            uptime: os.uptime(),
+            users: this.users.size,
+            connections: this.io.engine.clientsCount
+        };
+        
+        return metrics[name] || 0;
+    }
+    
+    // ==========================================
+    // STATS
+    // ==========================================
+    getStats(tenantId = 'all') {
+        return {
+            timestamp: new Date().toISOString(),
+            problems: {
+                total: 1247,
+                today: 47,
+                critical: 3,
+                resolved: 1189
+            },
+            users: {
+                active: this.users.size,
+                total: 5234,
+                newToday: 12
+            },
+            revenue: {
+                today: '$1,247',
+                thisMonth: '$38,921',
+                total: '$1.2M'
+            },
+            performance: {
+                avgDetectionTime: '0.8s',
+                avgFixTime: '3.2s',
+                successRate: '98.7%',
+                aiConfidence: '92%'
+            },
+            topProblems: [
+                { type: 'HIGH_CPU', count: 234, trend: '↑ 12%' },
+                { type: 'MEMORY_LEAK', count: 189, trend: '↓ 5%' },
+                { type: 'SERVICE_DOWN', count: 145, trend: '→' },
+                { type: 'DISK_FULL', count: 98, trend: '↑ 3%' },
+                { type: 'SLOW_DATABASE', count: 87, trend: '↓ 8%' }
+            ]
+        };
+    }
+    
+    // ==========================================
+    // ALERTS
+    // ==========================================
+    getAlerts(tenantId = 'all') {
+        return [
+            {
+                id: 'ALT-001',
+                type: 'HIGH_CPU',
+                severity: 'CRITICAL',
+                message: 'CPU at 94% on production server',
+                timestamp: new Date().toISOString(),
+                acknowledged: false,
+                tenantId
+            },
+            {
+                id: 'ALT-002',
+                type: 'MEMORY_LEAK',
+                severity: 'HIGH',
+                message: 'Memory usage growing 5%/hour',
+                timestamp: new Date(Date.now() - 300000).toISOString(),
+                acknowledged: true,
+                acknowledgedBy: 'john@tech.com'
+            }
+        ].filter(a => tenantId === 'all' || a.tenantId === tenantId);
+    }
+    
+    acknowledgeAlert(tenantId, alertId, user) {
+        console.log(`   ✅ Alert ${alertId} acknowledged by ${user}`);
+        // Update in database
+    }
+    
+    resolveAlert(tenantId, alertId) {
+        console.log(`   ✅ Alert ${alertId} resolved`);
+        // Update in database
+    }
+    
+    // ==========================================
+    // PROBLEMS FEED
+    // ==========================================
+    getProblems(tenantId = 'all') {
+        return [
+            {
+                id: 'PRB-001',
+                description: 'Server CPU 95% during peak',
+                type: 'HIGH_CPU',
+                severity: 'CRITICAL',
+                status: 'DETECTED',
+                confidence: 92,
+                timestamp: new Date().toISOString()
+            },
+            {
+                id: 'PRB-002',
+                description: 'Memory leak in auth service',
+                type: 'MEMORY_LEAK',
+                severity: 'HIGH',
+                status: 'FIXING',
+                confidence: 88,
+                timestamp: new Date(Date.now() - 600000).toISOString()
+            },
+            {
+                id: 'PRB-003',
+                description: 'Database timeout',
+                type: 'SLOW_DATABASE',
+                severity: 'HIGH',
+                status: 'RESOLVED',
+                confidence: 95,
+                timestamp: new Date(Date.now() - 3600000).toISOString()
+            }
+        ].filter(p => tenantId === 'all' || p.tenantId === tenantId);
+    }
+    
+    // ==========================================
+    // GHOST MODE
+    // ==========================================
+    getGhostStatus(tenantId) {
+        return {
+            active: true,
+            serversMonitored: 12,
+            predictionsToday: 47,
+            autoHealsToday: 3,
+            preventedDowntime: '45 minutes',
+            savingsToday: '$12,500',
+            nextPredictedIssue: {
+                type: 'CPU_SPIKE',
+                estimatedTime: '22 minutes',
+                confidence: 94,
+                action: 'Pre-scaling initiated'
+            }
+        };
+    }
+    
+    // ==========================================
+    // BROADCAST HELPERS
+    // ==========================================
+    
+    // Send to specific tenant
+    sendToTenant(tenantId, event, data) {
+        this.io.to(`tenant:${tenantId}`).emit(event, data);
+    }
+    
+    // Send to all tenants
+    broadcastToAll(event, data) {
+        this.io.emit(event, data);
+    }
+    
+    // Send to admins only
+    sendToAdmins(event, data) {
+        this.io.to('admin').emit(event, data);
+    }
+    
+    // Send alert
+    sendAlert(alert) {
+        this.io.to(`alerts:${alert.tenantId || 'all'}`).emit('alert:new', alert);
+        if (alert.severity === 'CRITICAL') {
+            this.io.to('admin').emit('alert:critical', alert);
+        }
+    }
+    
+    // ==========================================
+    // CLEANUP
+    // ==========================================
+    destroy() {
+        if (this.metricsInterval) {
+            clearInterval(this.metricsInterval);
+        }
+        this.io.close();
+        console.log('📊 Dashboard Socket closed');
+    }
+}
+
+// ============================================
+// DASHBOARD HTML (For Testing)
+// ============================================
+function getDashboardHTML() {
+    return `
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Supreme Dashboard - LIVE</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { font-family: 'Segoe UI', sans-serif; background: #0a0a1a; color: #eee; }
+        .dashboard { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 20px; padding: 20px; }
+        .card { background: #12122a; border-radius: 12px; padding: 20px; border: 1px solid #2a2a4a; }
+        .card h3 { color: #f5576c; margin-bottom: 15px; }
+        .metric { font-size: 32px; font-weight: bold; color: #4facfe; }
+        .alert-item { padding: 10px; margin: 5px 0; border-radius: 6px; }
+        .alert-critical { background: rgba(220,53,69,0.2); border-left: 3px solid #dc3545; }
+        .alert-high { background: rgba(255,152,0,0.2); border-left: 3px solid #ff9800; }
+        .live-dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: #28a745; animation: pulse 2s infinite; }
+        @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.3} }
+    </style>
+</head>
+<body>
+    <div style="padding:20px;background:#12122a;">
+        <h1>📊 Supreme Dashboard <span class="live-dot"></span> LIVE</h1>
+        <p style="color:#888;">Real-time monitoring active</p>
+    </div>
+    
+    <div class="dashboard">
+        <div class="card">
+            <h3>💻 CPU Usage</h3>
+            <div class="metric" id="cpu">--</div>
+            <div id="cpuBar" style="height:10px;background:#2a2a4a;border-radius:5px;margin-top:10px;">
+                <div style="height:100%;width:0%;background:#4facfe;border-radius:5px;transition:0.5s;"></div>
+            </div>
+        </div>
+        
+        <div class="card">
+            <h3>💾 Memory</h3>
+            <div class="metric" id="memory">--</div>
+        </div>
+        
+        <div class="card">
+            <h3>👥 Active Users</h3>
+            <div class="metric" id="users">--</div>
+        </div>
+        
+        <div class="card">
+            <h3>🔍 Problems Today</h3>
+            <div class="metric" id="problems">--</div>
+        </div>
+        
+        <div class="card" style="grid-column:span 2;">
+            <h3>🚨 Live Alerts</h3>
+            <div id="alerts"></div>
+        </div>
+    </div>
+    
+    <script src="/socket.io/socket.io.js"></script>
+    <script>
+        const socket = io({
+            auth: { token: localStorage.getItem('token') }
+        });
+        
+        socket.on('connect', () => console.log('✅ Connected'));
+        
+        socket.on('metrics:update', (data) => {
+            document.getElementById('cpu').textContent = data.system.cpu.usage + '%';
+            document.getElementById('memory').textContent = data.system.memory.usagePercent + '%';
+            document.getElementById('users').textContent = data.application.activeUsers;
+            
+            // Update CPU bar
+            const bar = document.querySelector('#cpuBar div');
+            if (bar) bar.style.width = data.system.cpu.usage + '%';
+        });
+        
+        socket.on('alerts:update', (alerts) => {
+            document.getElementById('alerts').innerHTML = alerts.map(a => 
+                '<div class="alert-item alert-' + a.severity.toLowerCase() + '">' +
+                '<strong>' + a.severity + '</strong>: ' + a.message +
+                '<br><small>' + new Date(a.timestamp).toLocaleTimeString() + '</small>' +
+                '</div>'
+            ).join('');
+        });
+        
+        socket.on('stats:update', (stats) => {
+            document.getElementById('problems').textContent = stats.problems.today;
+        });
+        
+        // Subscribe to channels
+        socket.emit('subscribe:metrics');
+        socket.emit('subscribe:alerts');
+    </script>
+</body>
+</html>`;
+}
+
+// ============================================
+// EXPORT
+// ============================================
+module.exports = { DashboardSocket, getDashboardHTML };
