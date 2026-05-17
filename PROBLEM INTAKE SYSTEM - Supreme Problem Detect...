@@ -1,1 +1,830 @@
+// ============================================
+// PROBLEM INTAKE (problem-intake.js)
+// Universal Problem Collector - Any Source, Any Format
+// ============================================
+
+const fs = require('fs');
+const path = require('path');
+const crypto = require('crypto');
+const EventEmitter = require('events');
+
+// ============================================
+// PROBLEM INTAKE ENGINE
+// ============================================
+class ProblemIntake extends EventEmitter {
+    
+    constructor() {
+        super();
+        this.sources = new Map();
+        this.queue = new ProblemQueue();
+        this.parser = new UniversalParser();
+        this.validator = new ProblemValidator();
+        this.categorizer = new ProblemCategorizer();
+        this.prioritizer = new ProblemPrioritizer();
+        this.deduper = new ProblemDeduper();
+        this.stats = {
+            totalReceived: 0,
+            valid: 0,
+            duplicates: 0,
+            processed: 0,
+            rejected: 0
+        };
+        
+        this.registerDefaultSources();
+    }
+    
+    // Register input sources
+    registerDefaultSources() {
+        this.addSource('api', new APIProblemSource());
+        this.addSource('cli', new CLIProblemSource());
+        this.addSource('file', new FileProblemSource());
+        this.addSource('webhook', new WebhookProblemSource());
+        this.addSource('email', new EmailProblemSource());
+        this.addSource('chat', new ChatProblemSource());
+        this.addSource('monitor', new MonitorProblemSource());
+        this.addSource('log', new LogProblemSource());
+        this.addSource('database', new DatabaseProblemSource());
+        this.addSource('stream', new StreamProblemSource());
+    }
+    
+    // Add custom source
+    addSource(name, source) {
+        this.sources.set(name, source);
+        source.on('problem', (problem) => this.intake(problem, name));
+        console.log(`📥 Source registered: ${name}`);
+    }
+    
+    // Main intake method - accepts ANY format
+    async intake(rawInput, sourceName = 'direct') {
+        const intakeId = this.generateId();
+        const timestamp = Date.now();
+        
+        console.log(`\n📥 Intake [${intakeId}] from: ${sourceName}`);
+        
+        try {
+            // Step 1: Parse input (any format → structured)
+            const parsed = await this.parser.parse(rawInput);
+            console.log(`   Parsed: ${parsed.type || 'unknown'}`);
+            
+            // Step 2: Validate
+            const validation = this.validator.validate(parsed);
+            if (!validation.valid) {
+                console.log(`   ❌ Invalid: ${validation.reason}`);
+                this.stats.rejected++;
+                this.emit('rejected', { intakeId, reason: validation.reason });
+                return { success: false, reason: validation.reason };
+            }
+            
+            // Step 3: Normalize
+            const normalized = this.normalize(parsed);
+            
+            // Step 4: Check duplicates
+            const duplicateCheck = await this.deduper.check(normalized);
+            if (duplicateCheck.isDuplicate) {
+                console.log(`   📎 Duplicate of: ${duplicateCheck.originalId}`);
+                this.stats.duplicates++;
+                this.emit('duplicate', { intakeId, originalId: duplicateCheck.originalId });
+                return { 
+                    success: true, 
+                    duplicate: true, 
+                    originalId: duplicateCheck.originalId 
+                };
+            }
+            
+            // Step 5: Categorize
+            const category = await this.categorizer.categorize(normalized);
+            normalized.category = category;
+            
+            // Step 6: Prioritize
+            const priority = this.prioritizer.prioritize(normalized);
+            normalized.priority = priority;
+            
+            // Step 7: Enrich with metadata
+            const enriched = await this.enrich(normalized);
+            
+            // Step 8: Add to queue
+            const queued = await this.queue.add(enriched);
+            
+            // Update stats
+            this.stats.totalReceived++;
+            this.stats.valid++;
+            
+            const result = {
+                intakeId,
+                problemId: queued.id,
+                source: sourceName,
+                category: category.type,
+                priority: priority.level,
+                status: 'QUEUED',
+                timestamp: new Date().toISOString(),
+                queuePosition: queued.position
+            };
+            
+            console.log(`   ✅ Queued: ${queued.id} (Priority: ${priority.level})`);
+            this.emit('intake', result);
+            
+            return result;
+            
+        } catch (error) {
+            this.stats.rejected++;
+            console.log(`   ❌ Error: ${error.message}`);
+            this.emit('error', { intakeId, error: error.message });
+            
+            return { 
+                success: false, 
+                error: error.message 
+            };
+        }
+    }
+    
+    // Normalize problem data
+    normalize(parsed) {
+        return {
+            id: null, // Assigned on queue
+            company: {
+                name: parsed.company || parsed.organization || 'Unknown',
+                domain: parsed.domain || this.extractDomain(parsed),
+                email: parsed.email || parsed.contact || 'unknown@unknown.com'
+            },
+            problem: {
+                title: parsed.title || parsed.summary || this.generateTitle(parsed),
+                description: parsed.description || parsed.details || parsed.body || '',
+                raw: parsed.raw || JSON.stringify(parsed),
+                language: parsed.language || parsed.lang || 'unknown',
+                framework: parsed.framework || parsed.stack || 'unknown',
+                platform: parsed.platform || parsed.os || 'unknown'
+            },
+            technical: {
+                errors: parsed.errors || [],
+                logs: parsed.logs || [],
+                metrics: parsed.metrics || {},
+                stackTrace: parsed.stackTrace || parsed.stack || '',
+                code: parsed.code || parsed.sourceCode || '',
+                file: parsed.file || parsed.filename || '',
+                line: parsed.line || parsed.lineNumber || 0
+            },
+            metadata: {
+                source: parsed.source || 'direct',
+                format: parsed.format || 'unknown',
+                version: parsed.version || '1.0',
+                environment: parsed.environment || parsed.env || 'unknown',
+                severity: parsed.severity || 'unknown',
+                tags: parsed.tags || [],
+                custom: parsed.custom || {}
+            },
+            timestamp: new Date().toISOString()
+        };
+    }
+    
+    // Enrich problem with additional data
+    async enrich(problem) {
+        // Add geolocation if IP present
+        if (problem.technical.metrics.ip) {
+            problem.enriched = {
+                geo: await this.getGeoLocation(problem.technical.metrics.ip),
+                timezone: Intl.DateTimeFormat().resolvedOptions().timeZone
+            };
+        }
+        
+        // Add system context
+        problem.system = {
+            intakeNode: os?.hostname() || 'unknown',
+            intakeVersion: 'v7.0',
+            processingDelay: Date.now() - new Date(problem.timestamp).getTime()
+        };
+        
+        return problem;
+    }
+    
+    extractDomain(parsed) {
+        // Extract domain from email, URL, or raw text
+        const text = JSON.stringify(parsed);
+        const domainMatch = text.match(/(?:@|https?:\/\/)([\w.-]+)/);
+        return domainMatch ? domainMatch[1] : 'unknown.com';
+    }
+    
+    generateTitle(parsed) {
+        const text = parsed.description || parsed.raw || JSON.stringify(parsed);
+        return text.substring(0, 100) + (text.length > 100 ? '...' : '');
+    }
+    
+    async getGeoLocation(ip) {
+        // Simulated geo lookup
+        return {
+            country: 'Unknown',
+            city: 'Unknown',
+            coordinates: { lat: 0, lon: 0 }
+        };
+    }
+    
+    generateId() {
+        return 'IN-' + Date.now().toString(36) + '-' + 
+               crypto.randomBytes(3).toString('hex');
+    }
+    
+    getStats() {
+        const queueStats = this.queue.getStats();
+        return {
+            ...this.stats,
+            queue: queueStats,
+            sources: this.sources.size,
+            uptime: process.uptime()
+        };
+    }
+    
+    // Get next problem for execution
+    async getNext() {
+        return await this.queue.dequeue();
+    }
+    
+    // Bulk intake
+    async bulkIntake(problems, sourceName = 'bulk') {
+        const results = [];
+        for (const problem of problems) {
+            const result = await this.intake(problem, sourceName);
+            results.push(result);
+        }
+        return results;
+    }
+}
+
+// ============================================
+// PROBLEM QUEUE (Priority-based)
+// ============================================
+class ProblemQueue {
+    
+    constructor() {
+        this.queues = {
+            P0_CRITICAL: [],
+            P1_HIGH: [],
+            P2_MEDIUM: [],
+            P3_LOW: []
+        };
+        this.problemMap = new Map(); // Quick lookup
+        this.totalQueued = 0;
+        this.totalDequeued = 0;
+    }
+    
+    async add(problem) {
+        const id = 'PRB-' + Date.now().toString(36) + '-' + 
+                   crypto.randomBytes(4).toString('hex');
+        problem.id = id;
+        
+        const priorityKey = `P${problem.priority.level}_${problem.priority.label}`;
+        const queueKey = Object.keys(this.queues).find(k => k.startsWith(`P${problem.priority.level}`));
+        
+        if (queueKey) {
+            this.queues[queueKey].push(problem);
+        } else {
+            this.queues.P3_LOW.push(problem);
+        }
+        
+        this.problemMap.set(id, problem);
+        this.totalQueued++;
+        
+        return { id, position: this.queues[queueKey]?.length || 0 };
+    }
+    
+    async dequeue() {
+        // Process by priority: P0 → P1 → P2 → P3
+        for (const [key, queue] of Object.entries(this.queues)) {
+            if (queue.length > 0) {
+                const problem = queue.shift();
+                this.totalDequeued++;
+                problem.status = 'PROCESSING';
+                problem.dequeuedAt = new Date().toISOString();
+                return problem;
+            }
+        }
+        return null;
+    }
+    
+    async peek() {
+        for (const queue of Object.values(this.queues)) {
+            if (queue.length > 0) return queue[0];
+        }
+        return null;
+    }
+    
+    getStats() {
+        return {
+            queued: this.totalQueued,
+            waiting: this.totalQueued - this.totalDequeued,
+            byPriority: {
+                P0: this.queues.P0_CRITICAL.length,
+                P1: this.queues.P1_HIGH.length,
+                P2: this.queues.P2_MEDIUM.length,
+                P3: this.queues.P3_LOW.length
+            }
+        };
+    }
+}
+
+// ============================================
+// UNIVERSAL PARSER (Any format → Structured)
+// ============================================
+class UniversalParser {
+    
+    async parse(input) {
+        // Auto-detect format and parse
+        if (typeof input === 'string') {
+            return await this.parseString(input);
+        } else if (Buffer.isBuffer(input)) {
+            return await this.parseBuffer(input);
+        } else if (typeof input === 'object') {
+            return input; // Already structured
+        }
+        
+        throw new Error('Unsupported input format');
+    }
+    
+    async parseString(text) {
+        // Try JSON
+        try {
+            const json = JSON.parse(text);
+            if (json && typeof json === 'object') {
+                return { ...json, format: 'json' };
+            }
+        } catch {}
+        
+        // Try YAML-like
+        if (text.includes(': ') && text.includes('\n')) {
+            return this.parseKeyValue(text);
+        }
+        
+        // Try URL encoded
+        if (text.includes('=') && text.includes('&')) {
+            return this.parseURLEncoded(text);
+        }
+        
+        // Try log format
+        if (text.match(/\[\d{4}-\d{2}-\d{2}/)) {
+            return this.parseLog(text);
+        }
+        
+        // Plain text
+        return {
+            format: 'text',
+            description: text,
+            raw: text
+        };
+    }
+    
+    parseKeyValue(text) {
+        const result = {};
+        text.split('\n').forEach(line => {
+            const [key, ...values] = line.split(':');
+            if (key && values.length > 0) {
+                result[key.trim().toLowerCase()] = values.join(':').trim();
+            }
+        });
+        return { ...result, format: 'keyvalue' };
+    }
+    
+    parseURLEncoded(text) {
+        const params = new URLSearchParams(text);
+        const result = {};
+        for (const [key, value] of params) {
+            result[key] = value;
+        }
+        return { ...result, format: 'urlencoded' };
+    }
+    
+    parseLog(text) {
+        const lines = text.split('\n');
+        return {
+            format: 'log',
+            timestamp: lines[0]?.match(/\[(.*?)\]/)?.[1],
+            description: lines.slice(1).join('\n'),
+            raw: text,
+            type: 'log_entry'
+        };
+    }
+    
+    async parseBuffer(buffer) {
+        const text = buffer.toString('utf-8');
+        return await this.parseString(text);
+    }
+}
+
+// ============================================
+// PROBLEM VALIDATOR
+// ============================================
+class ProblemValidator {
+    
+    validate(problem) {
+        // Must have description
+        if (!problem.description && !problem.body && !problem.details && !problem.raw) {
+            return { valid: false, reason: 'No problem description found' };
+        }
+        
+        // Must have enough information
+        const text = problem.description || problem.body || problem.details || problem.raw || '';
+        if (text.length < 10) {
+            return { valid: false, reason: 'Problem description too short (min 10 chars)' };
+        }
+        
+        // Check for spam/gibberish
+        if (this.isSpam(text)) {
+            return { valid: false, reason: 'Input appears to be spam' };
+        }
+        
+        return { valid: true };
+    }
+    
+    isSpam(text) {
+        // Check random character ratio
+        const alphaCount = (text.match(/[a-zA-Z]/g) || []).length;
+        const ratio = alphaCount / text.length;
+        
+        if (ratio < 0.4) return true; // Less than 40% letters
+        
+        // Check repeated patterns
+        const words = text.split(/\s+/);
+        const uniqueWords = new Set(words.map(w => w.toLowerCase()));
+        if (uniqueWords.size < 3 && words.length > 5) return true;
+        
+        return false;
+    }
+}
+
+// ============================================
+// PROBLEM CATEGORIZER
+// ============================================
+class ProblemCategorizer {
+    
+    static CATEGORIES = {
+        SERVER_DOWN: {
+            keywords: ['down', 'crash', 'unreachable', 'offline', '502', '503'],
+            type: 'INFRASTRUCTURE',
+            severity: 'CRITICAL'
+        },
+        SLOW_PERFORMANCE: {
+            keywords: ['slow', 'lag', 'latency', 'timeout', 'performance'],
+            type: 'PERFORMANCE',
+            severity: 'HIGH'
+        },
+        MEMORY_ISSUE: {
+            keywords: ['memory', 'ram', 'leak', 'oom', 'heap'],
+            type: 'RESOURCE',
+            severity: 'HIGH'
+        },
+        CPU_SPIKE: {
+            keywords: ['cpu', 'processor', 'usage', 'utilization', 'load'],
+            type: 'RESOURCE',
+            severity: 'HIGH'
+        },
+        DATABASE: {
+            keywords: ['database', 'db', 'sql', 'query', 'connection pool'],
+            type: 'DATABASE',
+            severity: 'HIGH'
+        },
+        NETWORK: {
+            keywords: ['network', 'dns', 'connection', 'firewall', 'packet'],
+            type: 'NETWORK',
+            severity: 'MEDIUM'
+        },
+        SECURITY: {
+            keywords: ['security', 'hack', 'breach', 'vulnerability', 'ssl', 'certificate'],
+            type: 'SECURITY',
+            severity: 'CRITICAL'
+        },
+        DEPLOYMENT: {
+            keywords: ['deploy', 'deployment', 'build', 'release', 'pipeline'],
+            type: 'DEVOPS',
+            severity: 'MEDIUM'
+        },
+        API_ERROR: {
+            keywords: ['api', 'endpoint', '400', '401', '403', '404', '500'],
+            type: 'API',
+            severity: 'MEDIUM'
+        },
+        CODE_BUG: {
+            keywords: ['bug', 'error', 'exception', 'undefined', 'null', 'syntax'],
+            type: 'CODE',
+            severity: 'MEDIUM'
+        },
+        CONFIG: {
+            keywords: ['config', 'configuration', 'env', 'settings', 'environment'],
+            type: 'CONFIGURATION',
+            severity: 'LOW'
+        },
+        UNKNOWN: {
+            keywords: [],
+            type: 'GENERAL',
+            severity: 'MEDIUM'
+        }
+    };
+    
+    async categorize(problem) {
+        const text = [
+            problem.problem?.title,
+            problem.problem?.description,
+            problem.technical?.errors?.join(' '),
+            problem.technical?.logs?.join(' ')
+        ].join(' ').toLowerCase();
+        
+        let bestMatch = null;
+        let bestScore = 0;
+        
+        for (const [category, config] of Object.entries(ProblemCategorizer.CATEGORIES)) {
+            let score = 0;
+            for (const keyword of config.keywords) {
+                if (text.includes(keyword)) {
+                    score += 10;
+                }
+            }
+            
+            if (score > bestScore) {
+                bestScore = score;
+                bestMatch = {
+                    category,
+                    ...config
+                };
+            }
+        }
+        
+        return bestMatch || {
+            category: 'UNKNOWN',
+            type: 'GENERAL',
+            severity: 'MEDIUM'
+        };
+    }
+}
+
+// ============================================
+// PROBLEM PRIORITIZER
+// ============================================
+class ProblemPrioritizer {
+    
+    prioritize(problem) {
+        let score = 0;
+        
+        // Severity weight
+        const severityScores = {
+            'CRITICAL': 100,
+            'HIGH': 70,
+            'MEDIUM': 40,
+            'LOW': 10
+        };
+        score += severityScores[problem.category?.severity] || 0;
+        
+        // Company trust (if available)
+        if (problem.company?.trustScore) {
+            score += problem.company.trustScore > 70 ? 20 : 0;
+        }
+        
+        // Problem age
+        if (problem.timestamp) {
+            const age = Date.now() - new Date(problem.timestamp).getTime();
+            if (age > 3600000) score += 30; // Older than 1 hour = urgent
+        }
+        
+        // Keywords in description
+        const urgentWords = ['urgent', 'critical', 'emergency', 'production', 'down', 'outage'];
+        const text = problem.problem?.description?.toLowerCase() || '';
+        urgentWords.forEach(word => {
+            if (text.includes(word)) score += 25;
+        });
+        
+        // Determine level
+        let level, label, color;
+        if (score >= 120) { level = 0; label = 'CRITICAL'; color = '#dc3545'; }
+        else if (score >= 80) { level = 1; label = 'HIGH'; color = '#ff9800'; }
+        else if (score >= 40) { level = 2; label = 'MEDIUM'; color = '#ffc107'; }
+        else { level = 3; label = 'LOW'; color = '#28a745'; }
+        
+        return { score, level, label, color };
+    }
+}
+
+// ============================================
+// PROBLEM DEDUPER
+// ============================================
+class ProblemDeduper {
+    
+    constructor() {
+        this.recentProblems = new Map(); // Last 1 hour
+        this.similarityThreshold = 0.85;
+    }
+    
+    async check(problem) {
+        const fingerprint = this.generateFingerprint(problem);
+        
+        // Check exact matches
+        if (this.recentProblems.has(fingerprint)) {
+            return {
+                isDuplicate: true,
+                originalId: this.recentProblems.get(fingerprint)
+            };
+        }
+        
+        // Check similar problems
+        for (const [fp, id] of this.recentProblems) {
+            const similarity = this.calculateSimilarity(fingerprint, fp);
+            if (similarity > this.similarityThreshold) {
+                return {
+                    isDuplicate: true,
+                    originalId: id,
+                    similarity
+                };
+            }
+        }
+        
+        // Store for future checks
+        this.recentProblems.set(fingerprint, problem.id || Date.now().toString());
+        
+        // Cleanup old entries
+        if (this.recentProblems.size > 10000) {
+            const keys = [...this.recentProblems.keys()];
+            for (let i = 0; i < 1000; i++) {
+                this.recentProblems.delete(keys[i]);
+            }
+        }
+        
+        return { isDuplicate: false };
+    }
+    
+    generateFingerprint(problem) {
+        const text = [
+            problem.problem?.description?.substring(0, 200),
+            problem.technical?.errors?.slice(0, 3).join(' '),
+            problem.category?.category
+        ].join('|').toLowerCase().replace(/[^a-z0-9]/g, '');
+        
+        return crypto.createHash('md5').update(text).digest('hex');
+    }
+    
+    calculateSimilarity(fp1, fp2) {
+        let matches = 0;
+        const len = Math.min(fp1.length, fp2.length);
+        for (let i = 0; i < len; i++) {
+            if (fp1[i] === fp2[i]) matches++;
+        }
+        return matches / len;
+    }
+}
+
+// ============================================
+// INPUT SOURCES (Extensible)
+// ============================================
+
+// API Source
+class APIProblemSource extends EventEmitter {
+    constructor() {
+        super();
+        this.name = 'api';
+    }
+    
+    async handleRequest(req) {
+        const problem = req.body;
+        this.emit('problem', problem);
+    }
+}
+
+// CLI Source
+class CLIProblemSource extends EventEmitter {
+    constructor() {
+        super();
+        this.name = 'cli';
+    }
+    
+    async handleArgv() {
+        const args = process.argv.slice(2);
+        if (args.length > 0) {
+            this.emit('problem', args.join(' '));
+        }
+    }
+}
+
+// File Source
+class FileProblemSource extends EventEmitter {
+    constructor() {
+        super();
+        this.name = 'file';
+    }
+    
+    async watchDirectory(dirPath) {
+        fs.watch(dirPath, (eventType, filename) => {
+            if (filename) {
+                const content = fs.readFileSync(path.join(dirPath, filename), 'utf-8');
+                this.emit('problem', content);
+            }
+        });
+    }
+}
+
+// Webhook Source
+class WebhookProblemSource extends EventEmitter {
+    constructor() {
+        super();
+        this.name = 'webhook';
+    }
+}
+
+// Email Source
+class EmailProblemSource extends EventEmitter {
+    constructor() {
+        super();
+        this.name = 'email';
+    }
+}
+
+// Chat Source (Slack, Discord, etc.)
+class ChatProblemSource extends EventEmitter {
+    constructor() {
+        super();
+        this.name = 'chat';
+    }
+}
+
+// Monitor Source (Prometheus, Grafana alerts)
+class MonitorProblemSource extends EventEmitter {
+    constructor() {
+        super();
+        this.name = 'monitor';
+    }
+}
+
+// Log Source (ELK, Splunk)
+class LogProblemSource extends EventEmitter {
+    constructor() {
+        super();
+        this.name = 'log';
+    }
+}
+
+// Database Source
+class DatabaseProblemSource extends EventEmitter {
+    constructor() {
+        super();
+        this.name = 'database';
+    }
+}
+
+// Stream Source (Kafka, RabbitMQ)
+class StreamProblemSource extends EventEmitter {
+    constructor() {
+        super();
+        this.name = 'stream';
+    }
+}
+
+// ============================================
+// USAGE EXAMPLE
+// ============================================
+const intake = new ProblemIntake();
+
+// Listen for events
+intake.on('intake', (result) => {
+    console.log('📥 New problem received:', result.problemId);
+});
+
+intake.on('rejected', (data) => {
+    console.log('❌ Problem rejected:', data.reason);
+});
+
+// Test various input formats
+async function testIntake() {
+    console.log('🧪 Testing Problem Intake...\n');
+    
+    // Test 1: JSON input
+    await intake.intake({
+        company: "TechCorp",
+        domain: "techcorp.com",
+        email: "support@techcorp.com",
+        description: "Server CPU at 95%, database timeout errors",
+        errors: ["Connection timeout", "CPU throttling"],
+        metrics: { cpu: 95, memory: 78 },
+        platform: "Linux",
+        language: "python",
+        severity: "HIGH"
+    });
+    
+    // Test 2: Plain text
+    await intake.intake(
+        "URGENT: Production server down! MongoDB connection timeout. Error 500 on all endpoints.",
+        'cli'
+    );
+    
+    // Test 3: Log format
+    await intake.intake(
+        "[2024-01-15 14:30:00] ERROR: java.lang.OutOfMemoryError: Java heap space\nat com.app.Server.main(Server.java:42)",
+        'log'
+    );
+    
+    // Test 4: Key-Value
+    await intake.intake(
+        "company: MyStartup\ndomain: mystartup.io\nproblem: SSL certificate expired\nseverity: CRITICAL",
+        'file'
+    );
+    
+    setTimeout(() => {
+        console.log('\n📊 Intake Stats:', JSON.stringify(intake.getStats(), null, 2));
+    }, 1000);
+}
+
+// testIntake();
+
+module.exports = { ProblemIntake, intake };
 
